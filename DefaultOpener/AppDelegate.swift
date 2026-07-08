@@ -139,7 +139,7 @@ class AppDelegate: NSObject {
     var primaryEditorObserver: NSKeyValueObservation?
     var blockedEditorObserver: NSKeyValueObservation?
 
-    // Built programmatically rather than as XIB-connected IBOutlets — see setupEditorPreferencesSection()
+    // Built programmatically rather than as XIB-connected IBOutlets — see buildEditorPreferencesSection()
     var editorsPopUp: NSPopUpButton?
     var editorBlocklistTable: NSTableView?
 
@@ -998,20 +998,9 @@ class AppDelegate: NSObject {
     // preferences window, rather than adding new IBOutlets/IBActions to MainMenu.xib. Mirrors the
     // browser blocklist section's behavior (multi-select table = blocklist) with a simpler,
     // always-visible layout.
-    private func setupEditorPreferencesSection() {
-        // Attach to "topWrapper" (leading-aligned), not the outer "mainWrapper" (centerX-aligned,
-        // and already ends with the "not default browser" warning row) — topWrapper is where all
-        // the actual left-aligned preference controls live, so this keeps the new section visually
-        // consistent with the rest of the window instead of appearing centered at the very bottom.
-        guard let contentView = preferencesWindow.contentView,
-              let topWrapper = findStackView(identifier: "topWrapper", in: contentView) else {
-            print("couldn't find topWrapper stack view; skipping editor preferences UI")
-            return
-        }
-
-        let header = NSTextField(labelWithString: "Markdown Editor")
-        header.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-
+    // Builds the "Markdown Editor" preferences content (primary editor popup + blocklist table)
+    // without attaching it anywhere — setupPreferencesTabs places it in the "Markdown" tab.
+    private func buildEditorPreferencesSection() -> NSStackView {
         let primaryLabel = NSTextField(labelWithString: "Primary Markdown Editor:")
         let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
         popUp.target = self
@@ -1054,13 +1043,68 @@ class AppDelegate: NSObject {
 
         let clearButton = NSButton(title: "Clear", target: self, action: #selector(editorBlocklistClearPress(sender:)))
 
-        let section = NSStackView(views: [header, primaryRow, explanation, scrollView, clearButton])
+        let section = NSStackView(views: [primaryRow, explanation, scrollView, clearButton])
         section.orientation = .vertical
         section.alignment = .leading
         section.spacing = 8
+        return section
+    }
 
-        topWrapper.addArrangedSubview(section)
+    // Splits Preferences into "Browser" and "Markdown" tabs. The browser controls (Primary Web
+    // Browser, Blocklist, Additional Browsers) are existing XIB-authored views — rather than
+    // editing MainMenu.xib to reparent them (real risk: a wrong outlet/connection in a hand-edited
+    // XIB fails silently at runtime, not at compile time), they're located here via outlets we
+    // already have (browsersPopUp, disclosureTriangle, userAccessDisclosureTriangle) and their
+    // known containing-stack-view structure, then moved into tabs entirely in code.
+    private func setupPreferencesTabs() {
+        guard let contentView = preferencesWindow.contentView,
+              let topWrapper = findStackView(identifier: "topWrapper", in: contentView) else {
+            print("couldn't find topWrapper stack view; skipping preferences tab split")
+            return
+        }
 
+        guard let browserRow = browsersPopUp.superview,
+              let blocklistSection = disclosureTriangle.superview?.superview,
+              let additionalBrowsersSection = userAccessDisclosureTriangle.superview?.superview else {
+            print("couldn't locate existing browser preference sections; skipping preferences tab split")
+            return
+        }
+
+        let markdownSection = buildEditorPreferencesSection()
+
+        let insertionIndex = topWrapper.arrangedSubviews.firstIndex(of: browserRow) ?? topWrapper.arrangedSubviews.count
+        for view in [browserRow, blocklistSection, additionalBrowsersSection] {
+            topWrapper.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let browserTabContent = NSStackView(views: [browserRow, blocklistSection, additionalBrowsersSection])
+        browserTabContent.orientation = .vertical
+        browserTabContent.alignment = .leading
+        browserTabContent.spacing = 12
+        browserTabContent.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 16, right: 4)
+
+        let markdownTabContent = NSStackView(views: [markdownSection])
+        markdownTabContent.orientation = .vertical
+        markdownTabContent.alignment = .leading
+        markdownTabContent.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 16, right: 4)
+
+        let browserTabItem = NSTabViewItem(identifier: "browser")
+        browserTabItem.label = "Browser"
+        browserTabItem.view = browserTabContent
+
+        let markdownTabItem = NSTabViewItem(identifier: "markdown")
+        markdownTabItem.label = "Markdown"
+        markdownTabItem.view = markdownTabContent
+
+        let tabView = NSTabView()
+        tabView.addTabViewItem(browserTabItem)
+        tabView.addTabViewItem(markdownTabItem)
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+
+        topWrapper.insertArrangedSubview(tabView, at: min(insertionIndex, topWrapper.arrangedSubviews.count))
+
+        preferencesWindow.title = "DefaultOpener"
         preferencesWindow.layoutIfNeeded()
         if let contentView = preferencesWindow.contentView {
             preferencesWindow.setContentSize(contentView.fittingSize)
@@ -1474,7 +1518,7 @@ extension AppDelegate: NSApplicationDelegate {
         }
 
         setupMenus()
-        setupEditorPreferencesSection()
+        setupPreferencesTabs()
 
         resetBrowsers()
         resetEditors()
