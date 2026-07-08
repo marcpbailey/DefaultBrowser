@@ -908,9 +908,13 @@ class AppDelegate: NSObject {
     // browser blocklist section's behavior (multi-select table = blocklist) with a simpler,
     // always-visible layout.
     private func setupEditorPreferencesSection() {
+        // Attach to "topWrapper" (leading-aligned), not the outer "mainWrapper" (centerX-aligned,
+        // and already ends with the "not default browser" warning row) — topWrapper is where all
+        // the actual left-aligned preference controls live, so this keeps the new section visually
+        // consistent with the rest of the window instead of appearing centered at the very bottom.
         guard let contentView = preferencesWindow.contentView,
-              let mainWrapper = findStackView(identifier: "mainWrapper", in: contentView) else {
-            print("couldn't find mainWrapper stack view; skipping editor preferences UI")
+              let topWrapper = findStackView(identifier: "topWrapper", in: contentView) else {
+            print("couldn't find topWrapper stack view; skipping editor preferences UI")
             return
         }
 
@@ -930,6 +934,10 @@ class AppDelegate: NSObject {
         let explanation = NSTextField(wrappingLabelWithString: "Editors selected below will never be opened by \(selfName), even if last used. Hold ⌘ or ⇧ to select multiple or deselect.")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.textColor = .secondaryLabelColor
+        explanation.translatesAutoresizingMaskIntoConstraints = false
+        // Without an explicit width, a wrapping label sizes to its single-line natural width
+        // instead of actually wrapping, since preferredMaxLayoutWidth defaults to 0.
+        explanation.widthAnchor.constraint(equalToConstant: 480).isActive = true
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editorNameColumn"))
         column.title = "Editor"
@@ -960,7 +968,7 @@ class AppDelegate: NSObject {
         section.alignment = .leading
         section.spacing = 8
 
-        mainWrapper.addArrangedSubview(section)
+        topWrapper.addArrangedSubview(section)
 
         preferencesWindow.layoutIfNeeded()
         if let contentView = preferencesWindow.contentView {
