@@ -136,7 +136,17 @@ class AppDelegate: NSObject {
         if let urlDescriptor = event.atIndex(1),
            let urlStr = urlDescriptor.stringValue,
            let url = URL(string: urlStr) {
-            _ = openUrls(urls: [url], additionalEventParamDescriptor: replyEvent)
+            // The app also registers CFBundleURLTypes for the "file" scheme (inherited from
+            // DefaultBrowser, so file:// links can be opened in the MRU browser too). On current
+            // macOS, that means Finder/LaunchServices deliver essentially all file opens — not
+            // just http(s) links — as GetURL Apple Events here, rather than as an 'odoc' event to
+            // application(_:openFile:)/openFiles:. Without this check, every .md open was being
+            // silently treated as a browser open.
+            if url.isFileURL && isMarkdownFile(url) {
+                _ = openMarkdownFiles(urls: [url])
+            } else {
+                _ = openUrls(urls: [url], additionalEventParamDescriptor: replyEvent)
+            }
         } else {
             let errorAlert = NSAlert()
             let appName = FileManager.default.displayName(atPath: Bundle.main.bundlePath)
