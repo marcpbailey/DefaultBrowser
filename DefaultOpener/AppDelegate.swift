@@ -284,9 +284,32 @@ class AppDelegate: NSObject {
             return false
         }
 
-        print("opening: \(urls) in \(theEditor)")
-        let openConfiguration = NSWorkspace.OpenConfiguration()
-        workspace.open(urls, withApplicationAt: editorUrl, configuration: openConfiguration)
+        let alreadyRunning = workspace.runningApplications.contains {
+            $0.bundleIdentifier?.lowercased() == theEditor.lowercased()
+        }
+
+        if alreadyRunning {
+            print("opening: \(urls) in \(theEditor) (already running)")
+            workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            // Launching a not-yet-running app and handing it files in one combined call appears to
+            // race with something in LaunchServices' cold-launch resolution — observed in practice
+            // as the open silently falling through to the default browser instead of the intended
+            // editor. Explicitly launching first and only handing off the files once the launch
+            // completes sidesteps that: by the time we call open(withApplicationAt:), it's the same
+            // already-running case that works reliably.
+            print("launching \(theEditor) before opening: \(urls)")
+            workspace.openApplication(at: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                guard let self else { return }
+                if let error {
+                    print("failed to launch \(theEditor): \(error)")
+                    return
+                }
+                DispatchQueue.main.async {
+                    self.workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration())
+                }
+            }
+        }
         return true
     }
 
