@@ -19,6 +19,7 @@ enum MenuItemTag: Int {
     case usePrimary
     case EditorListTop
     case EditorListBottom
+    case useEditorPrimary
 }
 
 // Height of each menu item's icon
@@ -101,8 +102,19 @@ class AppDelegate: NSObject {
         })
     }
 
-    // keep an ordered list of running markdown editors
+    // keep an ordered list of running markdown editors (used only to show "not running" as a
+    // faded icon in the menu — see updateMenuItems — not for MRU selection; see editorLastActivated)
     var runningEditors: [NSRunningApplication] = []
+
+    // last-activation timestamp per editor bundle id, independent of whether it's still running.
+    // Unlike browsers — which are typically kept running semi-permanently, so "most recently
+    // activated among currently-running browsers" is a reasonable proxy for "most recently used" —
+    // markdown editors are routinely launched, used, and quit. Gating MRU selection on "is it still
+    // running" meant any editor merely left open in the background (e.g. for unrelated work) would
+    // win over the editor actually last used for markdown, and over the primary editor setting.
+    // Tracking real timestamps here lets the true most-recently-used editor be relaunched from disk
+    // even if it's no longer running.
+    var editorLastActivated: [String: Date] = [:]
 
     // an explicitly chosen default browser
     var explicitBrowser: String? = nil
@@ -112,6 +124,9 @@ class AppDelegate: NSObject {
 
     // the user's "system" default browser
     var usePrimaryBrowser: Bool? = false
+
+    // force always using the primary markdown editor, ignoring MRU — mirrors usePrimaryBrowser
+    var usePrimaryEditor: Bool? = false
 
     // user settings
     let defaults = ThisDefaults()
@@ -214,6 +229,9 @@ class AppDelegate: NSObject {
             }
             runningEditors.sort { a, _ in
                 a.bundleIdentifier == app.bundleIdentifier
+            }
+            if let bid = app.bundleIdentifier, validEditors.contains(bid) {
+                editorLastActivated[bid] = Date()
             }
             updateMenuItems()
         }
@@ -470,17 +488,23 @@ class AppDelegate: NSObject {
             return !blocklist.contains(bundleId)
         }
 
+        // if usePrimaryEditor is forced on, use that unconditionally — mirrors usePrimaryBrowser
+        if let primaryEditor = defaults.primaryEditor, usePrimaryEditor == true, isEligible(primaryEditor) {
+            return primaryEditor
+        }
         // if an explicit editor is chosen, use that
         if let explicitEditor, isEligible(explicitEditor) {
             return explicitEditor
         }
-        // use the last used editor that's running
-        if let firstRunningEditor = runningEditors
-            .filter({ isEligible($0.bundleIdentifier ?? "") })
-            .first?.bundleIdentifier {
-            return firstRunningEditor
+        // use the most recently activated eligible editor, by real timestamp — regardless of
+        // whether it's still running (openMarkdownFiles will relaunch it from disk if needed)
+        if let mostRecentlyUsed = validEditors
+            .filter(isEligible)
+            .compactMap({ bid in editorLastActivated[bid].map { (bid, $0) } })
+            .max(by: { $0.1 < $1.1 })?.0 {
+            return mostRecentlyUsed
         }
-        // if no eligible editors are running, use the primary one
+        // if no eligible editor has ever been activated, use the primary one
         if let primaryEditor = defaults.primaryEditor, isEligible(primaryEditor) {
             return primaryEditor
         }
@@ -887,6 +911,14 @@ class AppDelegate: NSObject {
             editorItem.state = .on
             menu.insertItem(editorItem, at: editorIdx)
         }
+
+        let useEditorPrimaryItem = menu.item(withTag: MenuItemTag.useEditorPrimary.rawValue)!
+        switch usePrimaryEditor {
+        case .none:
+            useEditorPrimaryItem.state = .mixed
+        case .some(let wrapped):
+            useEditorPrimaryItem.state = wrapped ? .on : .off
+        }
     }
 
     // refresh blocklist bar ui
@@ -1087,6 +1119,18 @@ class AppDelegate: NSObject {
         }
     }
 
+    @objc func useEditorPrimary(sender: NSMenuItem) {
+        setUseEditorPrimary(state: sender.state != .on)
+    }
+
+    func setUseEditorPrimary(state: Bool) {
+        if defaults.primaryEditor != nil {
+            usePrimaryEditor = state
+            explicitEditor = nil
+            updateMenuItems()
+        }
+    }
+
     @objc func openPreferencesWindow(sender: AnyObject) {
         preferencesWindow.makeKeyAndOrderFront(sender)
         if #available(macOS 14.0, *) {
@@ -1138,6 +1182,9 @@ class AppDelegate: NSObject {
         let editorListBottom = NSMenuItem.separator()
         editorListBottom.tag = MenuItemTag.EditorListBottom.rawValue
         statusMenu.addItem(editorListBottom)
+        let useEditorPrimaryMenuItem = NSMenuItem(title: "Use Primary Editor", action: #selector(useEditorPrimary), keyEquivalent: "")
+        useEditorPrimaryMenuItem.tag = MenuItemTag.useEditorPrimary.rawValue
+        statusMenu.addItem(useEditorPrimaryMenuItem)
         statusMenu.addItem(quit())
         statusItem.menu = statusMenu
         
