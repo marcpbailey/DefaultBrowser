@@ -1039,6 +1039,9 @@ class AppDelegate: NSObject {
         if #available(macOS 11.0, *) {
             table.style = .plain // avoid the newer inset/rounded-selection list appearance
         }
+        // Faint alternating row shading — with the list now wide, it's otherwise hard to visually
+        // trace a row across from its checkbox back to its name.
+        table.usesAlternatingRowBackgroundColors = true
         table.dataSource = editorBlocklistDataSource
         table.delegate = editorBlocklistDataSource
         table.doubleAction = #selector(removeSelectedAdditionalEditors(sender:))
@@ -1965,21 +1968,25 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             image.size = NSSize(width: MENU_ITEM_HEIGHT, height: MENU_ITEM_HEIGHT)
             cell.imageView?.image = image
         }
-        cell.textField?.stringValue = parent.appName(for: bid)
-        cell.textField?.textColor = isPrimary ? .disabledControlTextColor : .controlTextColor
-        // Manually-added editors (via "Add Editor…") are visually distinguished with italics.
-        // NSFontManager.convert(_:toHaveTrait:) is unreliable specifically for the system font (it
-        // can silently return the font unchanged); NSFontDescriptor's symbolic traits work correctly.
+        // Manually-added editors (via "Add Editor…") are visually distinguished with a slant.
+        // Neither NSFontManager.convert(_:toHaveTrait:) nor NSFontDescriptor symbolic traits
+        // reliably produce a distinct italic face for the system font (both can silently no-op) —
+        // .obliqueness applies a shear transform to the glyphs directly, which works regardless of
+        // whether the font has a true italic design.
         let isManuallyAdded = parent.defaults.additionalEditors.contains(bid)
         let baseFont = cell.textField?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        var traits = baseFont.fontDescriptor.symbolicTraits
+        let textColor: NSColor = isPrimary ? .disabledControlTextColor : .controlTextColor
+        let name = parent.appName(for: bid)
         if isManuallyAdded {
-            traits.insert(.italic)
+            cell.textField?.attributedStringValue = NSAttributedString(
+                string: name,
+                attributes: [.font: baseFont, .obliqueness: 0.2, .foregroundColor: textColor]
+            )
         } else {
-            traits.remove(.italic)
+            cell.textField?.font = baseFont
+            cell.textField?.textColor = textColor
+            cell.textField?.stringValue = name
         }
-        let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits)
-        cell.textField?.font = NSFont(descriptor: descriptor, size: baseFont.pointSize) ?? baseFont
 
         checkbox.tag = row
         checkbox.target = self
