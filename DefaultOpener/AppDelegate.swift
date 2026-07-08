@@ -972,7 +972,13 @@ class AppDelegate: NSObject {
         // is just a plain reload (refreshes checkbox state + the primary editor's disabled
         // appearance) — no more reselecting rows, which is what was fighting the table's own
         // scroll-into-view behavior on every click.
+        // reloadData() clears the table's selection as a side effect, so capture/restore it —
+        // this runs (via the editorBlocklist KVO observer) every time a checkbox is toggled, and
+        // losing the selection there would clobber a multi-row selection built up specifically to
+        // toggle several checkboxes together.
+        let selection = editorBlocklistTable.selectedRowIndexes
         editorBlocklistTable.reloadData()
+        editorBlocklistTable.selectRowIndexes(selection, byExtendingSelection: false)
     }
 
     // Finds a stack view by its Interface Builder `identifier` attribute. Used to attach the
@@ -1047,11 +1053,13 @@ class AppDelegate: NSObject {
         table.doubleAction = #selector(removeSelectedAdditionalEditors(sender:))
         editorBlocklistDataSource.parent = self
         editorBlocklistTable = table
+        NotificationCenter.default.addObserver(editorBlocklistDataSource, selector: #selector(EditorBlocklistDataSource.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
 
         let scrollView = NSScrollView()
         scrollView.documentView = table
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder // match the browser blocklist's IB-authored scroll view
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         editorBlocklistScrollView = scrollView
         // Width is tied dynamically to the tab's actual width in setupPreferencesTabs, once the
@@ -1295,12 +1303,20 @@ class AppDelegate: NSObject {
     }
 
     @objc func openPreferencesWindow(sender: AnyObject) {
+        // Activate the app BEFORE ordering the window front, and use the forceful
+        // ignoringOtherApps variant unconditionally. The newer argument-less NSApp.activate()
+        // (macOS 14+) applies its own heuristics and can silently decline to activate — the window
+        // then gets ordered front but stays behind whatever app was already frontmost, with no
+        // error or signal that it happened. ignoringOtherApps: true is deprecated in favor of
+        // activate(), but it's the right tool for a direct, deliberate user click on our own menu
+        // item (as opposed to some background app grabbing focus uninvited, which is what the
+        // newer API's heuristics guard against), and doesn't exhibit the same silent failure.
+        // Accessory-policy (no Dock icon, i.e. LSUIElement) apps like this one are the sharpest
+        // edge case for window activation in general — see
+        // https://steipete.me/posts/2025/showing-settings-from-macos-menu-bar-items for a deeper
+        // workaround (temporarily switching to .regular activation policy) if this ever recurs.
+        NSApp.activate(ignoringOtherApps: true)
         preferencesWindow.makeKeyAndOrderFront(sender)
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
     }
 
     @objc func openAboutWindow(sender: AnyObject) {
@@ -1905,6 +1921,16 @@ extension EditorBlocklistDataSource: NSTableViewDataSource {
 }
 
 extension EditorBlocklistDataSource: NSTableViewDelegate {
+    // The primary editor's checkbox is always unchecked and disabled (it can never be
+    // blocklisted), so its row shouldn't be selectable either — otherwise it can end up part of a
+    // multi-row selection whose checkbox-toggle silently skips it, which looks broken.
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        guard let parent, parent.validEditors.indices.contains(row) else {
+            return true
+        }
+        return parent.validEditors[row] != parent.defaults.primaryEditor
+    }
+
     // Blocklist membership is a checkbox on each row, independent of table selection — row
     // selection stays completely normal (single click selects just that row, ⌘/⇧ extend it) so
     // it can be used for its one remaining job, picking rows to remove via Delete. An earlier
@@ -1942,10 +1968,6 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             textField.lineBreakMode = .byTruncatingTail
             let checkboxButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
             checkboxButton.translatesAutoresizingMaskIntoConstraints = false
-            // Without this, clicking the checkbox makes it (and its row) first responder, which
-            // resets the table's selection to just that row — clobbering a multi-row selection
-            // the user built up specifically to toggle several checkboxes at once.
-            checkboxButton.refusesFirstResponder = true
 
             cell.addSubview(imageView)
             cell.addSubview(textField)
@@ -2005,6 +2027,15 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         return cell
     }
 
+    // This table's column is never given a columnAutoresizingStyle, so it never resizes on its
+    // own as the table's width changes (the table/scrollview itself does correctly track the
+    // tab's width via the widthAnchor chain in setupPreferencesTabs — it's specifically the
+    // column inside it that stays pinned at its initial width). sizeToFit() forces the column to
+    // fill the table's current width.
+    @objc func windowResized(_ note: Notification) {
+        parent?.editorBlocklistTable?.sizeToFit()
+    }
+
     @objc func checkboxToggled(sender: NSButton) {
         guard let parent, parent.validEditors.indices.contains(sender.tag) else {
             return
@@ -2034,7 +2065,10 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             }
         }
         parent.defaults.editorBlocklist = blocklist
-        parent.editorBlocklistTable?.reloadData() // refresh every affected row's checkbox
+        // Setting editorBlocklist triggers the KVO observer (resetEditors ->
+        // updateEditorBlocklistTable), which reloads the table and preserves selection — no need
+        // to reload here too, and reloading twice was clearing the selection before that
+        // observer's preserve/restore logic ever got a chance to run.
     }
 }
 
