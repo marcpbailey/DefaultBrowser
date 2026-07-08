@@ -1,0 +1,28 @@
+name: Tag creation
+
+on:
+  push:
+    tags:
+       - '*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get the version
+        id: version
+        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+        shell: bash
+
+      - uses: apexskier/github-semver-parse@v1
+        id: semver
+        with:
+          version: ${{ steps.version.outputs.VERSION }}
+
+      - name: Release
+        if: ${{ steps.semver.outputs.version }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          prerelease: ${{ !!steps.semver.outputs.prerelease }}
