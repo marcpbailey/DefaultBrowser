@@ -158,15 +158,16 @@ class AppDelegate: NSObject {
             // application(_:openFile:)/openFiles:. Without this check, every .md open was being
             // silently treated as a browser open.
             if url.isFileURL && isMarkdownFile(url) {
-                // Suspend the reply and only resume it once the hand-off to the target editor has
-                // actually completed, rather than replying as soon as we've merely received the
-                // event — experiment to see whether Finder's open-animation timing is tied to this
-                // reply (it currently appears to visually resolve against the second hop instead of
-                // the first, since this app never shows a window of its own).
-                let suspensionID = NSAppleEventManager.shared().suspendCurrentAppleEvent()
-                _ = openMarkdownFiles(urls: [url]) {
-                    if let suspensionID {
-                        NSAppleEventManager.shared().resume(withSuspensionID: suspensionID)
+                // Deferring the Apple Event reply until the hand-off completes (an earlier
+                // experiment) made the already-running case worse — it added a real round-trip of
+                // latency to what used to be a near-instant open, without clearly fixing the
+                // cold-launch case either. Reverted; trying a transient invisible window instead
+                // (see withTransientWindow), on the theory that Finder's animation is tied to
+                // tracking a window appearing/disappearing for this (LSUIElement, otherwise
+                // windowless) app, and currently has nothing to track for the first hop.
+                withTransientWindow { done in
+                    _ = self.openMarkdownFiles(urls: [url]) {
+                        done()
                     }
                 }
             } else {
@@ -278,12 +279,32 @@ class AppDelegate: NSObject {
         return true
     }
 
+    // Creates a real but invisible (off-screen, alpha 0) window, runs `operation`, and closes the
+    // window once `operation` calls the `done` closure it's given. Experiment: Finder's
+    // open-animation seems to expect an app to present (and later dismiss) a window, which this
+    // LSUIElement app never otherwise does — giving it one to track for the first hop (Finder →
+    // DefaultOpener) may fix the animation appearing to resolve against the second hop instead
+    // (DefaultOpener → target editor). See handleGetURLEvent.
+    private func withTransientWindow(_ operation: (@escaping () -> Void) -> Void) {
+        let window = NSWindow(
+            contentRect: NSRect(x: -10000, y: -10000, width: 1, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderFront(nil)
+        operation { [weak window] in
+            window?.close()
+        }
+    }
+
     // Open markdown files with the MRU-selected editor, routing through Obsidian's obsidian://
     // URL scheme (rather than a plain launch) when the file lives inside one of its vaults.
     // `completion` fires once the hand-off to the target editor has actually finished (not just
-    // been kicked off) — used to resume a suspended Apple Event reply at the right time, so
-    // Finder's open-animation timing is tied to when the file is actually open rather than to our
-    // own (invisible, LSUIElement) app's initial receipt of the request. See handleGetURLEvent.
+    // been kicked off) — used by handleGetURLEvent's withTransientWindow experiment to close the
+    // transient window at the right time.
     func openMarkdownFiles(urls: [URL], completion: (() -> Void)? = nil) -> Bool {
         guard let firstFile = urls.first else {
             completion?()
