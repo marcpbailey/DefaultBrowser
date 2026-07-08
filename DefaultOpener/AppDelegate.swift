@@ -158,18 +158,11 @@ class AppDelegate: NSObject {
             // application(_:openFile:)/openFiles:. Without this check, every .md open was being
             // silently treated as a browser open.
             if url.isFileURL && isMarkdownFile(url) {
-                // Deferring the Apple Event reply until the hand-off completes (an earlier
-                // experiment) made the already-running case worse — it added a real round-trip of
-                // latency to what used to be a near-instant open, without clearly fixing the
-                // cold-launch case either. Reverted; trying a transient invisible window instead
-                // (see withTransientWindow), on the theory that Finder's animation is tied to
-                // tracking a window appearing/disappearing for this (LSUIElement, otherwise
-                // windowless) app, and currently has nothing to track for the first hop.
-                withTransientWindow { done in
-                    _ = self.openMarkdownFiles(urls: [url]) {
-                        done()
-                    }
-                }
+                // Two experiments to fix Finder's open-animation timing (deferring the Apple Event
+                // reply, then a transient invisible window) both made things worse — reverted back
+                // to a plain, direct call. The animation-timing quirk is being left as a known
+                // cosmetic issue of this being an invisible (LSUIElement) intermediary app.
+                _ = openMarkdownFiles(urls: [url])
             } else {
                 _ = openUrls(urls: [url], additionalEventParamDescriptor: replyEvent)
             }
@@ -279,32 +272,11 @@ class AppDelegate: NSObject {
         return true
     }
 
-    // Creates a real but invisible (off-screen, alpha 0) window, runs `operation`, and closes the
-    // window once `operation` calls the `done` closure it's given. Experiment: Finder's
-    // open-animation seems to expect an app to present (and later dismiss) a window, which this
-    // LSUIElement app never otherwise does — giving it one to track for the first hop (Finder →
-    // DefaultOpener) may fix the animation appearing to resolve against the second hop instead
-    // (DefaultOpener → target editor). See handleGetURLEvent.
-    private func withTransientWindow(_ operation: (@escaping () -> Void) -> Void) {
-        let window = NSWindow(
-            contentRect: NSRect(x: -10000, y: -10000, width: 1, height: 1),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.alphaValue = 0
-        window.ignoresMouseEvents = true
-        window.orderFront(nil)
-        operation { [weak window] in
-            window?.close()
-        }
-    }
-
     // Open markdown files with the MRU-selected editor, routing through Obsidian's obsidian://
     // URL scheme (rather than a plain launch) when the file lives inside one of its vaults.
     // `completion` fires once the hand-off to the target editor has actually finished (not just
-    // been kicked off) — used by handleGetURLEvent's withTransientWindow experiment to close the
-    // transient window at the right time.
+    // been kicked off) — not currently used by any caller, but kept since the completion-handler
+    // variants of NSWorkspace.open are also how we detect/log a failed hand-off.
     func openMarkdownFiles(urls: [URL], completion: (() -> Void)? = nil) -> Bool {
         guard let firstFile = urls.first else {
             completion?()
@@ -1489,6 +1461,26 @@ extension AppDelegate: NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         defaults.register(defaults: defaultSettings)
 
+        // Discovery and menu/status-item setup happen first, before either blocking modal below —
+        // both handleGetURLEvent (file:// opens) and application(_:openFile:)/openFiles: (odoc
+        // opens) can fire as soon as this app is launched to service an open request, and on a
+        // fresh cold launch that request can arrive while a runModal() alert below is still
+        // un-dismissed. Since neither alert is about markdown editors at all, validEditors must be
+        // populated before either one, or a .md open racing ahead of the user dismissing them would
+        // hit an empty list and report "No Markdown Editors Found".
+        if let button = statusItem.button {
+            button.image = NSImage(named: "StatusBarButtonImage")
+            button.allowsMixedState = true
+        }
+
+        setupMenus()
+        setupEditorPreferencesSection()
+
+        resetBrowsers()
+        resetEditors()
+        updateMenuItems()
+        updateMenuBarIconPopUp()
+
         if isCurrentlyDefaultHttpHandler() == false {
             let notDefaultAlert = NSAlert()
             notDefaultAlert.addButton(withTitle: "Set As Default")
@@ -1513,20 +1505,6 @@ extension AppDelegate: NSApplicationDelegate {
         if defaults.openWindowOnLaunch {
             preferencesWindow.makeKeyAndOrderFront(self)
         }
-
-        // set up menu bar
-        if let button = statusItem.button {
-            button.image = NSImage(named: "StatusBarButtonImage")
-            button.allowsMixedState = true
-        }
-
-        setupMenus()
-        setupEditorPreferencesSection()
-
-        resetBrowsers()
-        resetEditors()
-        updateMenuItems()
-        updateMenuBarIconPopUp()
 
         showWindowCheckbox.state = defaults.openWindowOnLaunch ? .on : .off
         launchAtLoginCheckbox.state = isRegisteredAsLoginItem() ? .on : .off
