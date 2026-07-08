@@ -189,6 +189,9 @@ func getAllEditors(defaults: ThisDefaults) -> [String] {
     }
 
     editorBids.insert(obsidianBundleId)
+    // apps the user manually added because they don't declare markdown handling themselves,
+    // same reason Obsidian above is hardcoded rather than discovered
+    editorBids.formUnion(defaults.additionalEditors)
 
     let selfBid = Bundle.main.bundleIdentifier?.lowercased()
     return editorBids

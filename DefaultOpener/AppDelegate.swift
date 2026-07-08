@@ -1021,13 +1021,15 @@ class AppDelegate: NSObject {
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editorNameColumn"))
         column.title = "Editor"
-        column.width = 300
+        column.width = 292
 
         let table = NSTableView()
         table.addTableColumn(column)
         table.headerView = nil
         table.allowsMultipleSelection = true
         table.rowSizeStyle = .default
+        table.rowHeight = 15
+        table.intercellSpacing = NSSize(width: 3, height: 2)
         table.dataSource = editorBlocklistDataSource
         table.delegate = editorBlocklistDataSource
         editorBlocklistDataSource.parent = self
@@ -1042,8 +1044,11 @@ class AppDelegate: NSObject {
         scrollView.heightAnchor.constraint(equalToConstant: 120).isActive = true
 
         let clearButton = NSButton(title: "Clear", target: self, action: #selector(editorBlocklistClearPress(sender:)))
+        let addEditorButton = NSButton(title: "Add Editor…", target: self, action: #selector(addEditorPress(sender:)))
+        let buttonRow = NSStackView(views: [clearButton, addEditorButton])
+        buttonRow.orientation = .horizontal
 
-        let section = NSStackView(views: [primaryRow, explanation, scrollView, clearButton])
+        let section = NSStackView(views: [primaryRow, explanation, scrollView, buttonRow])
         section.orientation = .vertical
         section.alignment = .leading
         section.spacing = 8
@@ -1463,6 +1468,40 @@ class AppDelegate: NSObject {
     @objc func editorBlocklistClearPress(sender: NSButton) {
         defaults.editorBlocklist.removeAll()
     }
+
+    // For editors that don't declare markdown document type handling themselves (same situation
+    // as Obsidian, just not common enough to hardcode) — lets the user manually add one.
+    @objc func addEditorPress(sender: NSButton) {
+        let openPanel = NSOpenPanel()
+        openPanel.canChooseDirectories = false
+        openPanel.canChooseFiles = true
+        if #available(macOS 11.0, *) {
+            openPanel.allowedContentTypes = [.applicationBundle]
+        } else {
+            openPanel.allowedFileTypes = ["app"]
+        }
+        openPanel.directoryURL = URL(fileURLWithPath: "/Applications")
+        openPanel.prompt = "Add Editor"
+        openPanel.message = "Select an application to always offer as a markdown editor, even if it doesn't declare markdown support itself."
+
+        openPanel.begin { [weak self] response in
+            guard response == .OK, let url = openPanel.urls.first, let self else {
+                return
+            }
+            guard let bundleId = Bundle(url: url)?.bundleIdentifier else {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't Read App"
+                alert.informativeText = "\(url.lastPathComponent) doesn't look like a valid application."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
+            if !self.defaults.additionalEditors.contains(bundleId) {
+                self.defaults.additionalEditors.append(bundleId)
+            }
+            self.resetEditors()
+        }
+    }
 }
 
 extension AppDelegate: NSApplicationDelegate {
@@ -1766,11 +1805,50 @@ extension EditorBlocklistDataSource: NSTableViewDataSource {
 }
 
 extension EditorBlocklistDataSource: NSTableViewDelegate {
-    func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
-        guard let parent, parent.validEditors.indices.contains(row) else {
+    // View-based, with an icon + name — matches the browser blocklist table's look
+    // (BlocklistDelegate.tableView(_:viewFor:row:)) rather than a plain text-only cell.
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard let parent, let col = tableColumn, parent.validEditors.indices.contains(row) else {
             return nil
         }
-        return parent.appName(for: parent.validEditors[row])
+        let bid = parent.validEditors[row]
+
+        let cell: NSTableCellView
+        if let reused = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView {
+            cell = reused
+        } else {
+            cell = NSTableCellView()
+            cell.identifier = col.identifier
+
+            let imageView = NSImageView()
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            let textField = NSTextField(labelWithString: "")
+            textField.translatesAutoresizingMaskIntoConstraints = false
+            textField.lineBreakMode = .byTruncatingTail
+
+            cell.addSubview(imageView)
+            cell.addSubview(textField)
+            cell.imageView = imageView
+            cell.textField = textField
+
+            NSLayoutConstraint.activate([
+                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
+                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.widthAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
+                imageView.heightAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
+                textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 5),
+                textField.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
+                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+        }
+
+        if let url = parent.workspace.urlForApplication(withBundleIdentifier: bid) {
+            let image = parent.workspace.icon(forFile: url.relativePath)
+            image.size = NSSize(width: MENU_ITEM_HEIGHT, height: MENU_ITEM_HEIGHT)
+            cell.imageView?.image = image
+        }
+        cell.textField?.stringValue = parent.appName(for: bid)
+        return cell
     }
 
     func tableView(_ tableView: NSTableView, selectionIndexesForProposedSelection proposedSelectionIndexes: IndexSet) -> IndexSet {

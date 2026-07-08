@@ -29,6 +29,7 @@ private enum DefaultKey: String {
     case BrowserBlocklist
     case PrimaryEditor
     case EditorBlocklist
+    case AdditionalEditors
     case MenuBarIconStyle
     case TemplateMenuBarIcon
     case Bookmarks
@@ -47,6 +48,7 @@ let defaultSettings: [String: AnyObject] = [
     DefaultKey.BrowserBlocklist.rawValue: [] as AnyObject,
     DefaultKey.PrimaryEditor.rawValue: "" as AnyObject,
     DefaultKey.EditorBlocklist.rawValue: [] as AnyObject,
+    DefaultKey.AdditionalEditors.rawValue: [] as AnyObject,
     DefaultKey.MenuBarIconStyle.rawValue: MenuBarIconStyle.framed.rawValue as AnyObject,
     DefaultKey.TemplateMenuBarIcon.rawValue: true as AnyObject,
     DefaultKey.Bookmarks.rawValue: [:] as AnyObject,
@@ -145,6 +147,17 @@ class ThisDefaults: UserDefaults {
         }
         set (value) {
             setValue(value, forKey: DefaultKey.EditorBlocklist.rawValue)
+        }
+    }
+
+    // editors manually added by the user because they don't declare markdown document type
+    // handling themselves (same situation as Obsidian, just not common enough to hardcode)
+    var additionalEditors: [String] {
+        get {
+            stringArray(forKey: DefaultKey.AdditionalEditors.rawValue) ?? []
+        }
+        set (value) {
+            setValue(value, forKey: DefaultKey.AdditionalEditors.rawValue)
         }
     }
 
