@@ -1929,6 +1929,11 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         } else {
             cell = NSTableCellView()
             cell.identifier = col.identifier
+            // A view built from scratch (rather than an IB-authored cell template) has no
+            // autoresizing mask by default, so it never tracks the row's width as the column
+            // resizes — it just keeps whatever frame it had when first created. widthSizable
+            // makes it stretch with the row the same way an IB-authored cell would.
+            cell.autoresizingMask = [.width, .height]
 
             let imageView = NSImageView()
             imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -1937,6 +1942,10 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             textField.lineBreakMode = .byTruncatingTail
             let checkboxButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
             checkboxButton.translatesAutoresizingMaskIntoConstraints = false
+            // Without this, clicking the checkbox makes it (and its row) first responder, which
+            // resets the table's selection to just that row — clobbering a multi-row selection
+            // the user built up specifically to toggle several checkboxes at once.
+            checkboxButton.refusesFirstResponder = true
 
             cell.addSubview(imageView)
             cell.addSubview(textField)
