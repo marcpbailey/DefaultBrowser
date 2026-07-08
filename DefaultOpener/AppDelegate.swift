@@ -142,6 +142,8 @@ class AppDelegate: NSObject {
     // Built programmatically rather than as XIB-connected IBOutlets — see buildEditorPreferencesSection()
     var editorsPopUp: NSPopUpButton?
     var editorBlocklistTable: NSTableView?
+    var editorBlocklistScrollView: NSScrollView?
+    var editorExplanationLabel: NSTextField?
 
     // MARK: Signal/Notification Responses
 
@@ -1014,13 +1016,11 @@ class AppDelegate: NSObject {
         primaryRow.orientation = .horizontal
         primaryRow.alignment = .centerY
 
-        let explanation = NSTextField(wrappingLabelWithString: "Editors selected below will never be opened by \(selfName), even if last used. Hold ⌘ or ⇧ to select multiple or deselect.")
+        let explanation = NSTextField(wrappingLabelWithString: "Checked editors will never be opened by \(selfName), even if last used. Check or uncheck multiple items by selecting more than one.")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         explanation.textColor = .secondaryLabelColor
         explanation.translatesAutoresizingMaskIntoConstraints = false
-        // Without an explicit width, a wrapping label sizes to its single-line natural width
-        // instead of actually wrapping, since preferredMaxLayoutWidth defaults to 0.
-        explanation.widthAnchor.constraint(equalToConstant: 480).isActive = true
+        editorExplanationLabel = explanation
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editorNameColumn"))
         column.title = "Editor"
@@ -1049,7 +1049,10 @@ class AppDelegate: NSObject {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
+        editorBlocklistScrollView = scrollView
+        // Width is tied dynamically to the tab's actual width in setupPreferencesTabs, once the
+        // tab view exists — a fixed/minimum constant here made the list an oddly-fixed width that
+        // never tracked the window's real available space.
         scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
         // The scroll view (and only the scroll view) should absorb any extra space this section
         // is given — without an explicit low priority here, Auto Layout has no clear tie-breaker
@@ -1065,10 +1068,19 @@ class AppDelegate: NSObject {
         buttonRow.orientation = .horizontal
         buttonRow.setContentHuggingPriority(.required, for: .vertical)
 
+        let deleteExplanation = NSTextField(wrappingLabelWithString: "Added editors appear in italics; select them and press delete to remove them.")
+        deleteExplanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        deleteExplanation.textColor = .secondaryLabelColor
+        deleteExplanation.translatesAutoresizingMaskIntoConstraints = false
+        deleteExplanation.setContentHuggingPriority(.required, for: .vertical)
+        // Same dynamic width as `explanation` above (tied to the tab's actual width in
+        // setupPreferencesTabs) — both are wrapping labels that need a governing width to wrap.
+        deleteExplanation.widthAnchor.constraint(equalTo: explanation.widthAnchor).isActive = true
+
         primaryRow.setContentHuggingPriority(.required, for: .vertical)
         explanation.setContentHuggingPriority(.required, for: .vertical)
 
-        let section = NSStackView(views: [primaryRow, explanation, scrollView, buttonRow])
+        let section = NSStackView(views: [primaryRow, explanation, scrollView, buttonRow, deleteExplanation])
         section.orientation = .vertical
         section.alignment = .leading
         section.spacing = 8
@@ -1113,6 +1125,17 @@ class AppDelegate: NSObject {
         markdownTabContent.orientation = .vertical
         markdownTabContent.alignment = .leading
         markdownTabContent.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 16, right: 4)
+
+        // Tie the list and explanatory labels' widths to the tab's actual available width
+        // (ultimately anchored by the Browser tab's own, wider content) rather than a fixed
+        // constant — otherwise they're stuck at whatever that constant was regardless of how
+        // much space the window actually has.
+        if let scrollView = editorBlocklistScrollView {
+            scrollView.widthAnchor.constraint(equalTo: markdownTabContent.widthAnchor, constant: -8).isActive = true
+        }
+        if let explanationLabel = editorExplanationLabel {
+            explanationLabel.widthAnchor.constraint(equalTo: markdownTabContent.widthAnchor, constant: -8).isActive = true
+        }
 
         let browserTabItem = NSTabViewItem(identifier: "browser")
         browserTabItem.label = "Browser"
@@ -1905,7 +1928,12 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
                 imageView.heightAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
                 textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
                 textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                checkboxButton.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
+                // Indented by the overlay scrollbar's width in addition to the usual 5pt inset, so
+                // the scroller doesn't cover the checkboxes when it appears.
+                checkboxButton.trailingAnchor.constraint(
+                    equalTo: cell.trailingAnchor,
+                    constant: -(5 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay))
+                ),
                 checkboxButton.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                 textField.trailingAnchor.constraint(lessThanOrEqualTo: checkboxButton.leadingAnchor, constant: -8),
             ])
@@ -1919,6 +1947,12 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         }
         cell.textField?.stringValue = parent.appName(for: bid)
         cell.textField?.textColor = isPrimary ? .disabledControlTextColor : .controlTextColor
+        // Manually-added editors (via "Add Editor…") are visually distinguished with italics.
+        let isManuallyAdded = parent.defaults.additionalEditors.contains(bid)
+        let baseFont = cell.textField?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        cell.textField?.font = isManuallyAdded
+            ? NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+            : NSFontManager.shared.convert(baseFont, toNotHaveTrait: .italicFontMask)
 
         checkbox.tag = row
         checkbox.target = self
