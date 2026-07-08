@@ -1249,16 +1249,33 @@ extension BlocklistDelegate: NSTableViewDelegate {
         guard let parent, parent.validBrowsers.indices.contains(sender.tag) else {
             return
         }
-        let app = parent.validBrowsers[sender.tag]
+        // If the toggled row is part of a multi-row selection, apply the same resulting state to
+        // every selected row instead of just the one that was clicked — matches the explanatory
+        // label ("check or uncheck multiple items by selecting more than one"), since a plain
+        // NSButton in a view-based table row has no built-in multi-row checkbox propagation the
+        // way a cell-based checkbox column does.
+        let table = parent.blocklistTable!
+        var rows: IndexSet = [sender.tag]
+        if table.selectedRowIndexes.contains(sender.tag) {
+            rows = table.selectedRowIndexes
+        }
+
+        let newState = sender.state == .on
         var blocklist = parent.defaults.browserBlocklist
-        if sender.state == .on {
-            if !blocklist.contains(app) {
-                blocklist.append(app)
+        for row in rows {
+            guard parent.validBrowsers.indices.contains(row) else { continue }
+            let app = parent.validBrowsers[row]
+            guard app != parent.defaults.primaryBrowser else { continue }
+            if newState {
+                if !blocklist.contains(app) {
+                    blocklist.append(app)
+                }
+            } else {
+                blocklist.removeAll { $0 == app }
             }
-        } else {
-            blocklist.removeAll { $0 == app }
         }
         parent.defaults.browserBlocklist = blocklist
+        table.reloadData() // refresh every affected row's checkbox, not just the clicked one
     }
 }
 
