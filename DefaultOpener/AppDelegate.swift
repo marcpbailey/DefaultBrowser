@@ -1130,6 +1130,14 @@ class AppDelegate: NSObject {
         markdownTabContent.orientation = .vertical
         markdownTabContent.alignment = .leading
         markdownTabContent.edgeInsets = NSEdgeInsets(top: 16, left: 4, bottom: 16, right: 4)
+        // NSStackView.alignment has no "fill" case for the cross axis — a vertical stack's
+        // "leading" alignment leaves each arranged subview at its own natural width, so without
+        // this explicit constraint markdownSection just sits at its own natural width, leaving
+        // blank space on the right whenever the tab is wider than the Markdown content alone needs.
+        markdownSection.widthAnchor.constraint(
+            equalTo: markdownTabContent.widthAnchor,
+            constant: -(markdownTabContent.edgeInsets.left + markdownTabContent.edgeInsets.right)
+        ).isActive = true
 
         // Tie the list and explanatory labels' widths to the tab's actual available width
         // (ultimately anchored by the Browser tab's own, wider content) rather than a fixed
@@ -1160,6 +1168,10 @@ class AppDelegate: NSObject {
         tabView.delegate = self
 
         topWrapper.insertArrangedSubview(tabView, at: min(insertionIndex, topWrapper.arrangedSubviews.count))
+        // topWrapper's "leading" alignment doesn't stretch arranged subviews to its full width on
+        // its own — without this, the tab view (and everything inside it, including the Markdown
+        // list) just sits at its own natural width instead of tracking the window's actual width.
+        tabView.widthAnchor.constraint(equalTo: topWrapper.widthAnchor).isActive = true
 
         // Switching tabs doesn't hand keyboard focus to anything in the newly-shown tab on its
         // own, so a table there stays visually "not focused" (gray selection) even after the user
@@ -1956,11 +1968,18 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         cell.textField?.stringValue = parent.appName(for: bid)
         cell.textField?.textColor = isPrimary ? .disabledControlTextColor : .controlTextColor
         // Manually-added editors (via "Add Editor…") are visually distinguished with italics.
+        // NSFontManager.convert(_:toHaveTrait:) is unreliable specifically for the system font (it
+        // can silently return the font unchanged); NSFontDescriptor's symbolic traits work correctly.
         let isManuallyAdded = parent.defaults.additionalEditors.contains(bid)
         let baseFont = cell.textField?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        cell.textField?.font = isManuallyAdded
-            ? NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-            : NSFontManager.shared.convert(baseFont, toNotHaveTrait: .italicFontMask)
+        var traits = baseFont.fontDescriptor.symbolicTraits
+        if isManuallyAdded {
+            traits.insert(.italic)
+        } else {
+            traits.remove(.italic)
+        }
+        let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits)
+        cell.textField?.font = NSFont(descriptor: descriptor, size: baseFont.pointSize) ?? baseFont
 
         checkbox.tag = row
         checkbox.target = self
