@@ -27,6 +27,8 @@ private enum DefaultKey: String {
     case DetailedAppNames
     case PrimaryBrowser
     case BrowserBlocklist
+    case PrimaryEditor
+    case EditorBlocklist
     case MenuBarIconStyle
     case TemplateMenuBarIcon
     case Bookmarks
@@ -43,6 +45,8 @@ let defaultSettings: [String: AnyObject] = [
     DefaultKey.DetailedAppNames.rawValue: false as AnyObject,
     DefaultKey.PrimaryBrowser.rawValue: "" as AnyObject,
     DefaultKey.BrowserBlocklist.rawValue: [] as AnyObject,
+    DefaultKey.PrimaryEditor.rawValue: "" as AnyObject,
+    DefaultKey.EditorBlocklist.rawValue: [] as AnyObject,
     DefaultKey.MenuBarIconStyle.rawValue: MenuBarIconStyle.framed.rawValue as AnyObject,
     DefaultKey.TemplateMenuBarIcon.rawValue: true as AnyObject,
     DefaultKey.Bookmarks.rawValue: [:] as AnyObject,
@@ -56,6 +60,14 @@ extension ThisDefaults {
 
     @objc dynamic var BrowserBlocklist: String? {
         string(forKey: DefaultKey.BrowserBlocklist.rawValue)
+    }
+
+    @objc dynamic var PrimaryEditor: String? {
+        string(forKey: DefaultKey.PrimaryEditor.rawValue)
+    }
+
+    @objc dynamic var EditorBlocklist: String? {
+        string(forKey: DefaultKey.EditorBlocklist.rawValue)
     }
 }
 
@@ -105,6 +117,34 @@ class ThisDefaults: UserDefaults {
         }
         set (value) {
             setValue(value, forKey: DefaultKey.BrowserBlocklist.rawValue)
+        }
+    }
+
+    // an explicitly chosen default markdown editor
+    var primaryEditor: String? {
+        get {
+            let value = string(forKey: DefaultKey.PrimaryEditor.rawValue)
+            if value == "" {
+                return nil
+            }
+            return value
+        }
+        set (value) {
+            // don't set to self
+            if value != nil && value?.lowercased() == Bundle.main.bundleIdentifier?.lowercased() {
+                return
+            }
+            set(value as? NSString, forKey: DefaultKey.PrimaryEditor.rawValue)
+        }
+    }
+
+    // a list of markdown editors to never set as default
+    var editorBlocklist: [String] {
+        get {
+            stringArray(forKey: DefaultKey.EditorBlocklist.rawValue) ?? []
+        }
+        set (value) {
+            setValue(value, forKey: DefaultKey.EditorBlocklist.rawValue)
         }
     }
 

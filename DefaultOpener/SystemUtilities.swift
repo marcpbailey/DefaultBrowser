@@ -7,8 +7,16 @@
 //
 
 import Cocoa
+import UniformTypeIdentifiers
 
 let browserQualifyingSchemes = ["https", "http"]
+
+let markdownEditorQualifyingExtensions = ["md", "markdown"]
+
+// Obsidian never registers as a markdown/text handler (it only opens files inside its own
+// vaults, declaring just "public.data"/"public.content" with LSHandlerRank None), so it can't be
+// discovered the way the other editors are — it has to be force-included instead.
+let obsidianBundleId = "md.obsidian"
 
 struct CoreBundle {
     let cfBundle: CFBundle
@@ -148,6 +156,55 @@ func getUserScopedBrowsers(defaults: ThisDefaults) -> [URL] {
         var handlerUrls = Set<URL>()
         for scheme in browserQualifyingSchemes {
             handlerUrls.formUnion(workspace.urlsForApplications(toOpen: URL(string: "\(scheme)://")!))
+        }
+
+        let urls = Array(handlerUrls.filter { bundle(url: $0, defaults: defaults) == nil })
+        return urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    } else {
+        return []
+    }
+}
+
+// return bundle ids for all applications that can open markdown files
+func getAllEditors(defaults: ThisDefaults) -> [String] {
+    var editorBids: Set<String>
+    if #available(macOS 12.0, *) {
+        let workspace = NSWorkspace.shared
+        var handlerUrls = Set<URL>()
+        for ext in markdownEditorQualifyingExtensions {
+            if let type = UTType(filenameExtension: ext) {
+                handlerUrls.formUnion(workspace.urlsForApplications(toOpen: type))
+            }
+        }
+
+        var localEditorBids: Set<String> = []
+        for handlerUrl in handlerUrls {
+            if let bundleID = bundle(url: handlerUrl, defaults: defaults)?.bundleIdentifier {
+                localEditorBids.insert(bundleID)
+            }
+        }
+        editorBids = localEditorBids
+    } else {
+        editorBids = []
+    }
+
+    editorBids.insert(obsidianBundleId)
+
+    let selfBid = Bundle.main.bundleIdentifier?.lowercased()
+    return editorBids
+        .filter({ $0.lowercased() != selfBid })
+        .sorted(by: { getAppName(bundleId: $0, defaults: defaults) < getAppName(bundleId: $1, defaults: defaults) })
+}
+
+// return urls for markdown-capable applications outside the sandbox's automatic reach
+func getUserScopedEditors(defaults: ThisDefaults) -> [URL] {
+    if #available(macOS 12.0, *) {
+        let workspace = NSWorkspace.shared
+        var handlerUrls = Set<URL>()
+        for ext in markdownEditorQualifyingExtensions {
+            if let type = UTType(filenameExtension: ext) {
+                handlerUrls.formUnion(workspace.urlsForApplications(toOpen: type))
+            }
         }
 
         let urls = Array(handlerUrls.filter { bundle(url: $0, defaults: defaults) == nil })
