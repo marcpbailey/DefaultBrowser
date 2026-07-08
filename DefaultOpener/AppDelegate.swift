@@ -1104,10 +1104,25 @@ class AppDelegate: NSObject {
 
         topWrapper.insertArrangedSubview(tabView, at: min(insertionIndex, topWrapper.arrangedSubviews.count))
 
+        // mainWrapper (topWrapper's container) has a plain NSView spacer between topWrapper and the
+        // "not default browser" warning row, with a very low hugging priority so it stretches to
+        // fill leftover space — that made sense to push the warning to the bottom of the original,
+        // much taller single-column window. With most of topWrapper's content now moved into a
+        // single (much shorter) tab view, that spacer would otherwise just greedily expand to
+        // consume the freed-up space instead of letting the window shrink. Pin it to a small fixed
+        // gap instead.
+        if let mainWrapper = findStackView(identifier: "mainWrapper", in: contentView) {
+            for view in mainWrapper.arrangedSubviews where !(view is NSStackView) {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                view.heightAnchor.constraint(equalToConstant: 16).isActive = true
+            }
+        }
+
         preferencesWindow.title = "DefaultOpener"
-        preferencesWindow.layoutIfNeeded()
-        if let contentView = preferencesWindow.contentView {
-            preferencesWindow.setContentSize(contentView.fittingSize)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let contentView = self.preferencesWindow.contentView else { return }
+            contentView.layoutSubtreeIfNeeded()
+            self.preferencesWindow.setContentSize(contentView.fittingSize)
         }
     }
 
