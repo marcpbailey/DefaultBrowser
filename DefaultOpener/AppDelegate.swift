@@ -965,6 +965,13 @@ class AppDelegate: NSObject {
 
     private func updateEditorBlocklistTable() {
         guard let editorBlocklistTable else { return }
+        // This refresh runs after every blocklist change, including ones the table's own
+        // selection just caused (via the EditorBlocklist KVO observer → resetEditors()) — without
+        // explicitly preserving scroll position, reselecting rows here was visibly scrolling the
+        // list (typically to the bottom) on every ⌘-click, even though nothing about the user's
+        // intent called for scrolling anywhere.
+        let scrollView = editorBlocklistTable.enclosingScrollView
+        let savedScrollPosition = scrollView?.contentView.bounds.origin
         editorBlocklistTable.needsDisplay = true
         editorBlocklistTable.reloadData()
         let blocklist = defaults.editorBlocklist
@@ -977,6 +984,10 @@ class AppDelegate: NSObject {
         }
         editorBlocklistTable.deselectAll(self)
         editorBlocklistTable.selectRowIndexes(selectedRows as IndexSet, byExtendingSelection: false)
+        if let scrollView, let savedScrollPosition {
+            scrollView.contentView.scroll(to: savedScrollPosition)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
     }
 
     // Finds a stack view by its Interface Builder `identifier` attribute. Used to attach the
@@ -1033,7 +1044,7 @@ class AppDelegate: NSObject {
         column.title = "Editor"
         column.width = 292
 
-        let table = NSTableView()
+        let table = EditorBlocklistTableView()
         table.addTableColumn(column)
         table.headerView = nil
         table.allowsMultipleSelection = true
@@ -1042,6 +1053,7 @@ class AppDelegate: NSObject {
         table.intercellSpacing = NSSize(width: 3, height: 2)
         table.dataSource = editorBlocklistDataSource
         table.delegate = editorBlocklistDataSource
+        table.doubleAction = #selector(removeSelectedAdditionalEditors(sender:))
         editorBlocklistDataSource.parent = self
         editorBlocklistTable = table
 
@@ -1151,7 +1163,7 @@ class AppDelegate: NSObject {
             }
         }
 
-        preferencesWindow.title = "DefaultOpener"
+        preferencesWindow.title = "Default Opener"
         DispatchQueue.main.async { [weak self] in
             guard let self, let contentView = self.preferencesWindow.contentView else { return }
             contentView.layoutSubtreeIfNeeded()
@@ -1530,6 +1542,21 @@ class AppDelegate: NSObject {
             self.resetEditors()
         }
     }
+
+    // Removes manually-added editors from the list entirely on Delete (via EditorBlocklistTableView)
+    // — mirrors revokeBookmark's pattern. Only bundle ids actually in additionalEditors are
+    // removable this way; discovered/hardcoded editors in the selection are silently left alone,
+    // since deleting them wouldn't mean anything (they'd just reappear on the next resetEditors()).
+    @objc func removeSelectedAdditionalEditors(sender: NSTableView) {
+        let selected = sender.selectedRowIndexes.compactMap { validEditors.indices.contains($0) ? validEditors[$0] : nil }
+        let removable = Set(selected).intersection(defaults.additionalEditors)
+        guard !removable.isEmpty else {
+            return
+        }
+        defaults.additionalEditors = defaults.additionalEditors.filter { !removable.contains($0) }
+        defaults.editorBlocklist = defaults.editorBlocklist.filter { !removable.contains($0) }
+        resetEditors()
+    }
 }
 
 extension AppDelegate: NSTabViewDelegate {
@@ -1871,14 +1898,19 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             cell.imageView = imageView
             cell.textField = textField
 
+            // Matches the exact metrics of the browser blocklist's Interface-Builder-authored
+            // prototype cell (MainMenu.xib, tableCellView id "g7y-Rs-bSY"): 5pt leading inset
+            // before the icon, 8pt gap between icon and text, 5pt trailing inset, both views
+            // pinned top+bottom to fill the row rather than centered at a fixed size.
             NSLayoutConstraint.activate([
-                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
-                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                imageView.widthAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
-                imageView.heightAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
-                textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 5),
-                textField.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
-                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 5),
+                imageView.topAnchor.constraint(equalTo: cell.topAnchor),
+                imageView.bottomAnchor.constraint(equalTo: cell.bottomAnchor),
+                imageView.widthAnchor.constraint(equalTo: imageView.heightAnchor),
+                textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
+                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
+                textField.topAnchor.constraint(equalTo: cell.topAnchor),
+                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor),
             ])
         }
 
