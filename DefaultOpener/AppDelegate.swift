@@ -158,7 +158,17 @@ class AppDelegate: NSObject {
             // application(_:openFile:)/openFiles:. Without this check, every .md open was being
             // silently treated as a browser open.
             if url.isFileURL && isMarkdownFile(url) {
-                _ = openMarkdownFiles(urls: [url])
+                // Suspend the reply and only resume it once the hand-off to the target editor has
+                // actually completed, rather than replying as soon as we've merely received the
+                // event — experiment to see whether Finder's open-animation timing is tied to this
+                // reply (it currently appears to visually resolve against the second hop instead of
+                // the first, since this app never shows a window of its own).
+                let suspensionID = NSAppleEventManager.shared().suspendCurrentAppleEvent()
+                _ = openMarkdownFiles(urls: [url]) {
+                    if let suspensionID {
+                        NSAppleEventManager.shared().resume(withSuspensionID: suspensionID)
+                    }
+                }
             } else {
                 _ = openUrls(urls: [url], additionalEventParamDescriptor: replyEvent)
             }
@@ -270,8 +280,13 @@ class AppDelegate: NSObject {
 
     // Open markdown files with the MRU-selected editor, routing through Obsidian's obsidian://
     // URL scheme (rather than a plain launch) when the file lives inside one of its vaults.
-    func openMarkdownFiles(urls: [URL]) -> Bool {
+    // `completion` fires once the hand-off to the target editor has actually finished (not just
+    // been kicked off) — used to resume a suspended Apple Event reply at the right time, so
+    // Finder's open-animation timing is tied to when the file is actually open rather than to our
+    // own (invisible, LSUIElement) app's initial receipt of the request. See handleGetURLEvent.
+    func openMarkdownFiles(urls: [URL], completion: (() -> Void)? = nil) -> Bool {
         guard let firstFile = urls.first else {
+            completion?()
             return false
         }
 
@@ -281,15 +296,18 @@ class AppDelegate: NSObject {
             noEditorAlert.informativeText = "\(selfName) couldn't find any installed markdown editors to use. Install something!"
             noEditorAlert.alertStyle = .warning
             noEditorAlert.runModal()
+            completion?()
             return false
         }
 
         if theEditor == obsidianBundleId {
             guard let obsidianUrl = ObsidianVault.openURL(for: firstFile) else {
+                completion?()
                 return false
             }
             print("opening: \(firstFile) in Obsidian via \(obsidianUrl)")
             workspace.open(obsidianUrl)
+            completion?()
             return true
         }
 
@@ -299,6 +317,7 @@ class AppDelegate: NSObject {
             alert.informativeText = "\(selfName) couldn't find \(theEditor)."
             alert.alertStyle = .warning
             alert.runModal()
+            completion?()
             return false
         }
 
@@ -308,7 +327,12 @@ class AppDelegate: NSObject {
 
         if alreadyRunning {
             print("opening: \(urls) in \(theEditor) (already running)")
-            workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration())
+            workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error {
+                    print("failed to open \(urls) in \(theEditor): \(error)")
+                }
+                completion?()
+            }
         } else {
             // Launching a not-yet-running app and handing it files in one combined call appears to
             // race with something in LaunchServices' cold-launch resolution — observed in practice
@@ -318,13 +342,22 @@ class AppDelegate: NSObject {
             // already-running case that works reliably.
             print("launching \(theEditor) before opening: \(urls)")
             workspace.openApplication(at: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
-                guard let self else { return }
+                guard let self else {
+                    completion?()
+                    return
+                }
                 if let error {
                     print("failed to launch \(theEditor): \(error)")
+                    completion?()
                     return
                 }
                 DispatchQueue.main.async {
-                    self.workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration())
+                    self.workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                        if let error {
+                            print("failed to open \(urls) in \(theEditor) after launch: \(error)")
+                        }
+                        completion?()
+                    }
                 }
             }
         }
