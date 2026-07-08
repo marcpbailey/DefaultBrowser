@@ -144,6 +144,7 @@ class AppDelegate: NSObject {
     var editorBlocklistTable: NSTableView?
     var editorBlocklistScrollView: NSScrollView?
     var editorExplanationLabel: NSTextField?
+    var editorDeleteExplanationLabel: NSTextField?
 
     // MARK: Signal/Notification Responses
 
@@ -1073,9 +1074,13 @@ class AppDelegate: NSObject {
         deleteExplanation.textColor = .secondaryLabelColor
         deleteExplanation.translatesAutoresizingMaskIntoConstraints = false
         deleteExplanation.setContentHuggingPriority(.required, for: .vertical)
-        // Same dynamic width as `explanation` above (tied to the tab's actual width in
-        // setupPreferencesTabs) — both are wrapping labels that need a governing width to wrap.
-        deleteExplanation.widthAnchor.constraint(equalTo: explanation.widthAnchor).isActive = true
+        // Tied to markdownTabContent's width in setupPreferencesTabs, same as `explanation` below —
+        // NOT tied directly to `explanation`'s width here: creating a constraint directly between
+        // two views that are both still detached from any window/view hierarchy reproducibly
+        // deadlocked the Auto Layout engine (hung applicationDidFinishLaunching indefinitely, with
+        // zero CPU usage, right at that constraint's activation). Tying each label separately to an
+        // ancestor once one actually exists avoids it.
+        editorDeleteExplanationLabel = deleteExplanation
 
         primaryRow.setContentHuggingPriority(.required, for: .vertical)
         explanation.setContentHuggingPriority(.required, for: .vertical)
@@ -1096,14 +1101,14 @@ class AppDelegate: NSObject {
     private func setupPreferencesTabs() {
         guard let contentView = preferencesWindow.contentView,
               let topWrapper = findStackView(identifier: "topWrapper", in: contentView) else {
-            print("couldn't find topWrapper stack view; skipping preferences tab split")
+            NSLog("[DefaultOpener] setupPreferencesTabs: couldn't find topWrapper stack view; skipping")
             return
         }
 
         guard let browserRow = browsersPopUp.superview,
               let blocklistSection = disclosureTriangle.superview?.superview,
               let additionalBrowsersSection = userAccessDisclosureTriangle.superview?.superview else {
-            print("couldn't locate existing browser preference sections; skipping preferences tab split")
+            NSLog("[DefaultOpener] setupPreferencesTabs: couldn't locate existing browser sections; skipping")
             return
         }
 
@@ -1135,6 +1140,9 @@ class AppDelegate: NSObject {
         }
         if let explanationLabel = editorExplanationLabel {
             explanationLabel.widthAnchor.constraint(equalTo: markdownTabContent.widthAnchor, constant: -8).isActive = true
+        }
+        if let deleteExplanationLabel = editorDeleteExplanationLabel {
+            deleteExplanationLabel.widthAnchor.constraint(equalTo: markdownTabContent.widthAnchor, constant: -8).isActive = true
         }
 
         let browserTabItem = NSTabViewItem(identifier: "browser")
