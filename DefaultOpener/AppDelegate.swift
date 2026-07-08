@@ -965,29 +965,11 @@ class AppDelegate: NSObject {
 
     private func updateEditorBlocklistTable() {
         guard let editorBlocklistTable else { return }
-        // This refresh runs after every blocklist change, including ones the table's own
-        // selection just caused (via the EditorBlocklist KVO observer → resetEditors()) — without
-        // explicitly preserving scroll position, reselecting rows here was visibly scrolling the
-        // list (typically to the bottom) on every ⌘-click, even though nothing about the user's
-        // intent called for scrolling anywhere.
-        let scrollView = editorBlocklistTable.enclosingScrollView
-        let savedScrollPosition = scrollView?.contentView.bounds.origin
-        editorBlocklistTable.needsDisplay = true
+        // Blocklist membership lives in each row's checkbox now, not in table selection, so this
+        // is just a plain reload (refreshes checkbox state + the primary editor's disabled
+        // appearance) — no more reselecting rows, which is what was fighting the table's own
+        // scroll-into-view behavior on every click.
         editorBlocklistTable.reloadData()
-        let blocklist = defaults.editorBlocklist
-        let primaryDefault = defaults.primaryEditor
-        let selectedRows = NSMutableIndexSet()
-        validEditors.enumerated().forEach { (i, editor) in
-            if (blocklist.contains(editor) && primaryDefault != editor) {
-                selectedRows.add(i)
-            }
-        }
-        editorBlocklistTable.deselectAll(self)
-        editorBlocklistTable.selectRowIndexes(selectedRows as IndexSet, byExtendingSelection: false)
-        if let scrollView, let savedScrollPosition {
-            scrollView.contentView.scroll(to: savedScrollPosition)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-        }
     }
 
     // Finds a stack view by its Interface Builder `identifier` attribute. Used to attach the
@@ -1044,13 +1026,18 @@ class AppDelegate: NSObject {
         column.title = "Editor"
         column.width = 292
 
-        let table = EditorBlocklistTableView()
+        // DeleteKeyTableView is the exact same class bookmarksTable already uses for its own
+        // Delete-key-to-remove gesture — reused directly rather than introducing another subclass.
+        let table = DeleteKeyTableView()
         table.addTableColumn(column)
         table.headerView = nil
         table.allowsMultipleSelection = true
         table.rowSizeStyle = .default
         table.rowHeight = 15
         table.intercellSpacing = NSSize(width: 3, height: 2)
+        if #available(macOS 11.0, *) {
+            table.style = .plain // avoid the newer inset/rounded-selection list appearance
+        }
         table.dataSource = editorBlocklistDataSource
         table.delegate = editorBlocklistDataSource
         table.doubleAction = #selector(removeSelectedAdditionalEditors(sender:))
@@ -1872,17 +1859,27 @@ extension EditorBlocklistDataSource: NSTableViewDataSource {
 }
 
 extension EditorBlocklistDataSource: NSTableViewDelegate {
-    // View-based, with an icon + name — matches the browser blocklist table's look
-    // (BlocklistDelegate.tableView(_:viewFor:row:)) rather than a plain text-only cell.
+    // Blocklist membership is a checkbox on each row, independent of table selection — row
+    // selection stays completely normal (single click selects just that row, ⌘/⇧ extend it) so
+    // it can be used for its one remaining job, picking rows to remove via Delete. An earlier
+    // version drove blocklist membership from table selection itself (mirroring the browser
+    // blocklist), which fought the list's own scroll-into-view behavior on every click and made
+    // deleting a specific manually-added editor impractical (selecting it for deletion also
+    // toggled its blocklist membership). Checkboxes avoid both problems entirely rather than
+    // patching around them.
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let parent, let col = tableColumn, parent.validEditors.indices.contains(row) else {
             return nil
         }
         let bid = parent.validEditors[row]
+        let isPrimary = bid == parent.defaults.primaryEditor
 
         let cell: NSTableCellView
-        if let reused = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView {
+        let checkbox: NSButton
+        if let reused = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView,
+           let reusedCheckbox = reused.subviews.first(where: { $0 is NSButton }) as? NSButton {
             cell = reused
+            checkbox = reusedCheckbox
         } else {
             cell = NSTableCellView()
             cell.identifier = col.identifier
@@ -1892,26 +1889,27 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             let textField = NSTextField(labelWithString: "")
             textField.translatesAutoresizingMaskIntoConstraints = false
             textField.lineBreakMode = .byTruncatingTail
+            let checkboxButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+            checkboxButton.translatesAutoresizingMaskIntoConstraints = false
 
             cell.addSubview(imageView)
             cell.addSubview(textField)
+            cell.addSubview(checkboxButton)
             cell.imageView = imageView
             cell.textField = textField
 
-            // Matches the exact metrics of the browser blocklist's Interface-Builder-authored
-            // prototype cell (MainMenu.xib, tableCellView id "g7y-Rs-bSY"): 5pt leading inset
-            // before the icon, 8pt gap between icon and text, 5pt trailing inset, both views
-            // pinned top+bottom to fill the row rather than centered at a fixed size.
             NSLayoutConstraint.activate([
                 imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 5),
-                imageView.topAnchor.constraint(equalTo: cell.topAnchor),
-                imageView.bottomAnchor.constraint(equalTo: cell.bottomAnchor),
-                imageView.widthAnchor.constraint(equalTo: imageView.heightAnchor),
+                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                imageView.widthAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
+                imageView.heightAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
                 textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
-                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
-                textField.topAnchor.constraint(equalTo: cell.topAnchor),
-                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor),
+                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                checkboxButton.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -5),
+                checkboxButton.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                textField.trailingAnchor.constraint(lessThanOrEqualTo: checkboxButton.leadingAnchor, constant: -8),
             ])
+            checkbox = checkboxButton
         }
 
         if let url = parent.workspace.urlForApplication(withBundleIdentifier: bid) {
@@ -1920,24 +1918,30 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
             cell.imageView?.image = image
         }
         cell.textField?.stringValue = parent.appName(for: bid)
+        cell.textField?.textColor = isPrimary ? .disabledControlTextColor : .controlTextColor
+
+        checkbox.tag = row
+        checkbox.target = self
+        checkbox.action = #selector(checkboxToggled(sender:))
+        checkbox.state = (parent.defaults.editorBlocklist.contains(bid) && !isPrimary) ? .on : .off
+        checkbox.isEnabled = !isPrimary
         return cell
     }
 
-    func tableView(_ tableView: NSTableView, selectionIndexesForProposedSelection proposedSelectionIndexes: IndexSet) -> IndexSet {
-        guard let parent else {
-            return proposedSelectionIndexes
+    @objc func checkboxToggled(sender: NSButton) {
+        guard let parent, parent.validEditors.indices.contains(sender.tag) else {
+            return
         }
-
-        parent.defaults.editorBlocklist = proposedSelectionIndexes
-            .compactMap { parent.validEditors.indices.contains($0) ? parent.validEditors[$0] : nil }
-            .filter { $0 != parent.defaults.primaryEditor }
-        if let primaryEditor = parent.defaults.primaryEditor,
-           let primaryIndex = parent.validEditors.firstIndex(of: primaryEditor) {
-            let newSelection = NSMutableIndexSet(indexSet: proposedSelectionIndexes)
-            newSelection.remove(primaryIndex)
-            return newSelection as IndexSet
+        let bid = parent.validEditors[sender.tag]
+        var blocklist = parent.defaults.editorBlocklist
+        if sender.state == .on {
+            if !blocklist.contains(bid) {
+                blocklist.append(bid)
+            }
+        } else {
+            blocklist.removeAll { $0 == bid }
         }
-        return proposedSelectionIndexes
+        parent.defaults.editorBlocklist = blocklist
     }
 }
 
