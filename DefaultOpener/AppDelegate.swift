@@ -2000,16 +2000,32 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         guard let parent, parent.validEditors.indices.contains(sender.tag) else {
             return
         }
-        let bid = parent.validEditors[sender.tag]
+        // If the toggled row is part of a multi-row selection, apply the same resulting state to
+        // every selected row instead of just the one that was clicked — matches the explanatory
+        // label ("check or uncheck multiple items by selecting more than one"), since a plain
+        // NSButton in a view-based table row has no built-in multi-row checkbox propagation the
+        // way a cell-based checkbox column does.
+        var rows: IndexSet = [sender.tag]
+        if let table = parent.editorBlocklistTable, table.selectedRowIndexes.contains(sender.tag) {
+            rows = table.selectedRowIndexes
+        }
+
+        let newState = sender.state == .on
         var blocklist = parent.defaults.editorBlocklist
-        if sender.state == .on {
-            if !blocklist.contains(bid) {
-                blocklist.append(bid)
+        for row in rows {
+            guard parent.validEditors.indices.contains(row) else { continue }
+            let bid = parent.validEditors[row]
+            guard bid != parent.defaults.primaryEditor else { continue }
+            if newState {
+                if !blocklist.contains(bid) {
+                    blocklist.append(bid)
+                }
+            } else {
+                blocklist.removeAll { $0 == bid }
             }
-        } else {
-            blocklist.removeAll { $0 == bid }
         }
         parent.defaults.editorBlocklist = blocklist
+        parent.editorBlocklistTable?.reloadData() // refresh every affected row's checkbox
     }
 }
 
