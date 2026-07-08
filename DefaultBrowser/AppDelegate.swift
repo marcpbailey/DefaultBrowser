@@ -665,8 +665,14 @@ class AppDelegate: NSObject {
         // is just a plain reload (refreshes checkbox state + the primary browser's disabled
         // appearance) — no more reselecting rows, which fought the table's own scroll-into-view
         // behavior on every refresh (e.g. a menu update mid-scroll would jump the list).
+        // reloadData() clears the table's selection as a side effect, so capture/restore it —
+        // this runs (via the browserBlocklist KVO observer) every time a checkbox is toggled,
+        // and losing the selection there would clobber a multi-row selection built up
+        // specifically to toggle several checkboxes together.
+        let selection = blocklistTable.selectedRowIndexes
         blocklistTable.needsDisplay = true
         blocklistTable.reloadData()
+        blocklistTable.selectRowIndexes(selection, byExtendingSelection: false)
     }
 
     private func updateBookmarksTable() {
@@ -732,12 +738,20 @@ class AppDelegate: NSObject {
     }
 
     @objc func openPreferencesWindow(sender: AnyObject) {
+        // Activate the app BEFORE ordering the window front, and use the forceful
+        // ignoringOtherApps variant unconditionally. The newer argument-less NSApp.activate()
+        // (macOS 14+) applies its own heuristics and can silently decline to activate — the window
+        // then gets ordered front but stays behind whatever app was already frontmost, with no
+        // error or signal that it happened. ignoringOtherApps: true is deprecated in favor of
+        // activate(), but it's the right tool for a direct, deliberate user click on our own menu
+        // item (as opposed to some background app grabbing focus uninvited, which is what the
+        // newer API's heuristics guard against), and doesn't exhibit the same silent failure.
+        // Accessory-policy (no Dock icon, i.e. LSUIElement) apps like this one are the sharpest
+        // edge case for window activation in general — see
+        // https://steipete.me/posts/2025/showing-settings-from-macos-menu-bar-items for a deeper
+        // workaround (temporarily switching to .regular activation policy) if this ever recurs.
+        NSApp.activate(ignoringOtherApps: true)
         preferencesWindow.makeKeyAndOrderFront(sender)
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
     }
 
     @objc func openAboutWindow(sender: AnyObject) {
@@ -1047,6 +1061,7 @@ extension AppDelegate: NSApplicationDelegate {
         if #available(macOS 11.0, *) {
             blocklistTable.style = .plain // avoid the newer inset/rounded-selection list appearance
         }
+        NotificationCenter.default.addObserver(blocklistDelegate, selector: #selector(BlocklistDelegate.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
 
         userAccessTable.dataSource = userAccessDelegate
         userAccessTable.delegate = userAccessDelegate
@@ -1174,6 +1189,16 @@ extension BlocklistDelegate: NSTableViewDataSource {
 }
 
 extension BlocklistDelegate: NSTableViewDelegate {
+    // The primary browser's checkbox is always unchecked and disabled (it can never be
+    // blocklisted), so its row shouldn't be selectable either — otherwise it can end up part of a
+    // multi-row selection whose checkbox-toggle silently skips it, which looks broken.
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        guard let parent, parent.validBrowsers.indices.contains(row) else {
+            return true
+        }
+        return parent.validBrowsers[row] != parent.defaults.primaryBrowser
+    }
+
     // Blocklist membership is a checkbox on each row, independent of table selection. An earlier
     // version drove membership from table selection itself: selecting a row blocklisted it. That
     // fought the list's own scroll-into-view behavior on every selection change (the list would
@@ -1208,10 +1233,6 @@ extension BlocklistDelegate: NSTableViewDelegate {
             textField.lineBreakMode = .byTruncatingTail
             let checkboxButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
             checkboxButton.translatesAutoresizingMaskIntoConstraints = false
-            // Without this, clicking the checkbox makes it (and its row) first responder, which
-            // resets the table's selection to just that row — clobbering a multi-row selection
-            // the user built up specifically to toggle several checkboxes at once.
-            checkboxButton.refusesFirstResponder = true
 
             cell.addSubview(imageView)
             cell.addSubview(textField)
@@ -1254,6 +1275,16 @@ extension BlocklistDelegate: NSTableViewDelegate {
         return cell
     }
 
+    // The table's single column has resizeWithTable="YES" / columnAutoresizingStyle="lastColumnOnly"
+    // in the XIB, which normally keeps a table's last column in sync with the table's own width —
+    // but that redistribution never actually ran here on window resize, leaving the column pinned
+    // at its initial XIB width and a growing dead zone of table background to the right of the
+    // real content as the window widened. sizeToFit() forces the column to fill the table's
+    // current width.
+    @objc func windowResized(_ note: Notification) {
+        parent?.blocklistTable.sizeToFit()
+    }
+
     @objc func checkboxToggled(sender: NSButton) {
         guard let parent, parent.validBrowsers.indices.contains(sender.tag) else {
             return
@@ -1284,7 +1315,10 @@ extension BlocklistDelegate: NSTableViewDelegate {
             }
         }
         parent.defaults.browserBlocklist = blocklist
-        table.reloadData() // refresh every affected row's checkbox, not just the clicked one
+        // Setting browserBlocklist triggers the KVO observer (resetBrowsers ->
+        // updateBlocklistTable), which reloads the table and preserves selection — no need to
+        // reload here too, and reloading twice was clearing the selection before that observer's
+        // preserve/restore logic ever got a chance to run.
     }
 }
 
