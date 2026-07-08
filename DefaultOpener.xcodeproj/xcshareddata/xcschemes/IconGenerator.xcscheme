@@ -18,7 +18,7 @@
                BlueprintIdentifier = "C56C6D6A2DCD272000CCAC17"
                BuildableName = "IconGenerator"
                BlueprintName = "IconGenerator"
-               ReferencedContainer = "container:DefaultBrowser.xcodeproj">
+               ReferencedContainer = "container:DefaultOpener.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -48,7 +48,7 @@
             BlueprintIdentifier = "C56C6D6A2DCD272000CCAC17"
             BuildableName = "IconGenerator"
             BlueprintName = "IconGenerator"
-            ReferencedContainer = "container:DefaultBrowser.xcodeproj">
+            ReferencedContainer = "container:DefaultOpener.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -75,7 +75,7 @@
             BlueprintIdentifier = "C56C6D6A2DCD272000CCAC17"
             BuildableName = "IconGenerator"
             BlueprintName = "IconGenerator"
-            ReferencedContainer = "container:DefaultBrowser.xcodeproj">
+            ReferencedContainer = "container:DefaultOpener.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

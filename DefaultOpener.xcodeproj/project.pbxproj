@@ -34,11 +34,11 @@
 
 /* Begin PBXFileReference section */
 		C56C6D6B2DCD272000CCAC17 /* IconGenerator */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = IconGenerator; sourceTree = BUILT_PRODUCTS_DIR; };
-		C5A333731BDAF6EA000767B2 /* Default Browser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Default Browser.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C5A333731BDAF6EA000767B2 /* DefaultOpener.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "DefaultOpener.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C5AEAF5D29292C0A00F57C2F /* test.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = test.html; sourceTree = "<group>"; };
 		C5AEAF5E29292C2900F57C2F /* .github */ = {isa = PBXFileReference; lastKnownFileType = folder; path = .github; sourceTree = "<group>"; };
 		C5C938A0249BF1AD0008EF81 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		C5E39DC31BE893EA004E722B /* Default Browser.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "Default Browser.entitlements"; sourceTree = "<group>"; };
+		C5E39DC31BE893EA004E722B /* DefaultOpener.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "DefaultOpener.entitlements"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -47,7 +47,7 @@
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = C5A333721BDAF6EA000767B2 /* Default Browser */;
+			target = C5A333721BDAF6EA000767B2 /* DefaultOpener */;
 		};
 		C56C6D8F2DCD28F200CCAC17 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -61,7 +61,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C56C6D802DCD28F200CCAC17 /* DefaultBrowser */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C56C6D8E2DCD28F200CCAC17 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C56C6D8F2DCD28F200CCAC17 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = DefaultBrowser; sourceTree = "<group>"; };
+		C56C6D802DCD28F200CCAC17 /* DefaultOpener */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C56C6D8E2DCD28F200CCAC17 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, C56C6D8F2DCD28F200CCAC17 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = DefaultOpener; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,8 +88,8 @@
 				C5AEAF5E29292C2900F57C2F /* .github */,
 				C5AEAF5D29292C0A00F57C2F /* test.html */,
 				C5C938A0249BF1AD0008EF81 /* README.md */,
-				C5E39DC31BE893EA004E722B /* Default Browser.entitlements */,
-				C56C6D802DCD28F200CCAC17 /* DefaultBrowser */,
+				C5E39DC31BE893EA004E722B /* DefaultOpener.entitlements */,
+				C56C6D802DCD28F200CCAC17 /* DefaultOpener */,
 				C5A333741BDAF6EA000767B2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -97,7 +97,7 @@
 		C5A333741BDAF6EA000767B2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C5A333731BDAF6EA000767B2 /* Default Browser.app */,
+				C5A333731BDAF6EA000767B2 /* DefaultOpener.app */,
 				C56C6D6B2DCD272000CCAC17 /* IconGenerator */,
 			);
 			name = Products;
@@ -125,9 +125,9 @@
 			productReference = C56C6D6B2DCD272000CCAC17 /* IconGenerator */;
 			productType = "com.apple.product-type.tool";
 		};
-		C5A333721BDAF6EA000767B2 /* Default Browser */ = {
+		C5A333721BDAF6EA000767B2 /* DefaultOpener */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C5A333961BDAF6EA000767B2 /* Build configuration list for PBXNativeTarget "Default Browser" */;
+			buildConfigurationList = C5A333961BDAF6EA000767B2 /* Build configuration list for PBXNativeTarget "DefaultOpener" */;
 			buildPhases = (
 				C5A3336F1BDAF6EA000767B2 /* Sources */,
 				C5A333711BDAF6EA000767B2 /* Resources */,
@@ -139,11 +139,11 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C56C6D802DCD28F200CCAC17 /* DefaultBrowser */,
+				C56C6D802DCD28F200CCAC17 /* DefaultOpener */,
 			);
-			name = "Default Browser";
-			productName = DefaultBrowser;
-			productReference = C5A333731BDAF6EA000767B2 /* Default Browser.app */;
+			name = DefaultOpener;
+			productName = DefaultOpener;
+			productReference = C5A333731BDAF6EA000767B2 /* DefaultOpener.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -172,7 +172,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C5A3336E1BDAF6EA000767B2 /* Build configuration list for PBXProject "DefaultBrowser" */;
+			buildConfigurationList = C5A3336E1BDAF6EA000767B2 /* Build configuration list for PBXProject "DefaultOpener" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -185,7 +185,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C5A333721BDAF6EA000767B2 /* Default Browser */,
+				C5A333721BDAF6EA000767B2 /* DefaultOpener */,
 				C56C6D6A2DCD272000CCAC17 /* IconGenerator */,
 			);
 		};
@@ -378,13 +378,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "Default Browser.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "DefaultOpener.entitlements";
 				CODE_SIGN_IDENTITY = "Mac Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = DefaultBrowser/Info.plist;
+				INFOPLIST_FILE = DefaultOpener/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -392,7 +392,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MARKETING_VERSION = 1.6.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.camlittle.DefaultBrowser.dev;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcbailey.defaultopener.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
 				SWIFT_VERSION = 5.0;
@@ -403,13 +403,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "Default Browser.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "DefaultOpener.entitlements";
 				CODE_SIGN_IDENTITY = "Mac Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = DefaultBrowser/Info.plist;
+				INFOPLIST_FILE = DefaultOpener/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -417,7 +417,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MARKETING_VERSION = 1.6.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.camlittle.DefaultBrowser;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcbailey.defaultopener;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
 				SWIFT_VERSION = 5.0;
@@ -436,7 +436,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C5A3336E1BDAF6EA000767B2 /* Build configuration list for PBXProject "DefaultBrowser" */ = {
+		C5A3336E1BDAF6EA000767B2 /* Build configuration list for PBXProject "DefaultOpener" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C5A333941BDAF6EA000767B2 /* Debug */,
@@ -445,7 +445,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C5A333961BDAF6EA000767B2 /* Build configuration list for PBXNativeTarget "Default Browser" */ = {
+		C5A333961BDAF6EA000767B2 /* Build configuration list for PBXNativeTarget "DefaultOpener" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C5A333971BDAF6EA000767B2 /* Debug */,
