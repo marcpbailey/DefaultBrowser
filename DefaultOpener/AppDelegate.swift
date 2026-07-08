@@ -86,10 +86,10 @@ class AppDelegate: NSObject {
     var validEditors: [String] = []
     var userScopedEditors: [URL] = []
 
-    let blocklistDelegate = BlocklistDelegate()
+    let blocklistDelegate = CheckboxBlocklistDataSource(pool: BrowserBlocklistPool())
     let userAccessDelegate = UserAccessBrowserDelegate()
     let bookmarksDelegate = BookmarksDelegate()
-    let editorBlocklistDataSource = EditorBlocklistDataSource()
+    let editorBlocklistDataSource = CheckboxBlocklistDataSource(pool: EditorBlocklistPool())
 
     // keep an ordered list of running browsers
     var runningBrowsers: [NSRunningApplication] = []
@@ -1019,13 +1019,22 @@ class AppDelegate: NSObject {
         popUp.action = #selector(primaryEditorPopUpChange(sender:))
         editorsPopUp = popUp
 
-        let primaryRow = NSStackView(views: [primaryLabel, popUp])
+        // A flexible spacer between the label and popup pushes the popup to the row's trailing
+        // edge — matching the Browser tab's "Primary Web Browser" row, which right-justifies its
+        // popup the same way (a plain, unconstrained spacer view with low hugging priority so it
+        // absorbs whatever extra width the row has).
+        let primarySpacer = NSView()
+        primarySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let primaryRow = NSStackView(views: [primaryLabel, primarySpacer, popUp])
         primaryRow.orientation = .horizontal
         primaryRow.alignment = .centerY
 
         let explanation = NSTextField(wrappingLabelWithString: "Checked editors will never be opened by \(selfName), even if last used. Check or uncheck multiple items by selecting more than one.")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        explanation.textColor = .secondaryLabelColor
+        // Matches the equivalent label above the Browser blocklist, which uses labelColor (not
+        // secondaryLabelColor) in the XIB.
+        explanation.textColor = .labelColor
         explanation.translatesAutoresizingMaskIntoConstraints = false
         editorExplanationLabel = explanation
 
@@ -1051,9 +1060,9 @@ class AppDelegate: NSObject {
         table.dataSource = editorBlocklistDataSource
         table.delegate = editorBlocklistDataSource
         table.doubleAction = #selector(removeSelectedAdditionalEditors(sender:))
-        editorBlocklistDataSource.parent = self
+        editorBlocklistDataSource.pool.appDelegate = self
         editorBlocklistTable = table
-        NotificationCenter.default.addObserver(editorBlocklistDataSource, selector: #selector(EditorBlocklistDataSource.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
+        NotificationCenter.default.addObserver(editorBlocklistDataSource, selector: #selector(CheckboxBlocklistDataSource.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
 
         let scrollView = NSScrollView()
         scrollView.documentView = table
@@ -1080,9 +1089,11 @@ class AppDelegate: NSObject {
         buttonRow.orientation = .horizontal
         buttonRow.setContentHuggingPriority(.required, for: .vertical)
 
-        let deleteExplanation = NSTextField(wrappingLabelWithString: "Added editors appear in italics; select them and press delete to remove them.")
+        let deleteExplanation = NSTextField(wrappingLabelWithString: "Added editors appear in italics; select and press delete to remove them.")
         deleteExplanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        deleteExplanation.textColor = .secondaryLabelColor
+        // Matches the equivalent label above the Browser blocklist, which uses labelColor (not
+        // secondaryLabelColor) in the XIB.
+        deleteExplanation.textColor = .labelColor
         deleteExplanation.translatesAutoresizingMaskIntoConstraints = false
         deleteExplanation.setContentHuggingPriority(.required, for: .vertical)
         // Tied to markdownTabContent's width in setupPreferencesTabs, same as `explanation` below —
@@ -1164,13 +1175,44 @@ class AppDelegate: NSObject {
             deleteExplanationLabel.widthAnchor.constraint(equalTo: markdownTabContent.widthAnchor, constant: -8).isActive = true
         }
 
+        // NSTabView has a long-documented quirk (going back to the pre-Auto-Layout NSViewController
+        // era) where assigning a real, non-trivial view directly as tabViewItem.view causes it to
+        // mismanage that view's frame — confirmed here as: the tab that's attached later via an
+        // actual user switch (as opposed to whichever tab starts out selected) gets a wrong initial
+        // width, and then drifts diagonally by a few points on every single window
+        // activate/deactivate cycle thereafter, compounding indefinitely. Only a real window resize
+        // forces NSTabView through a layout path that computes the correct geometry. The documented
+        // fix is to never hand NSTabView the real content view: wrap each in a plain, empty host
+        // view instead, and pin the real content to the host's edges ourselves via Auto Layout —
+        // NSTabView's own (buggy) geometry management only ever touches the trivial host.
+        func hostedTabView(for content: NSView) -> NSView {
+            let host = NSView()
+            // Leave the host in legacy autoresizing mode (the default) rather than opting it into
+            // Auto Layout — NSTabView expects to manage its assigned content view's frame the
+            // traditional way, and setting translatesAutoresizingMaskIntoConstraints = false on
+            // this outer view was already tried directly on browserTabContent/markdownTabContent
+            // and made no difference, since it hit NSTabView's same geometry bug either way. A
+            // view can host Auto Layout constraints among its own subviews regardless of that
+            // flag's setting, so the real content inside can still be constraint-pinned normally.
+            host.autoresizingMask = [.width, .height]
+            content.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                content.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                content.topAnchor.constraint(equalTo: host.topAnchor),
+                content.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            ])
+            return host
+        }
+
         let browserTabItem = NSTabViewItem(identifier: "browser")
         browserTabItem.label = "Browser"
-        browserTabItem.view = browserTabContent
+        browserTabItem.view = hostedTabView(for: browserTabContent)
 
         let markdownTabItem = NSTabViewItem(identifier: "markdown")
         markdownTabItem.label = "Markdown"
-        markdownTabItem.view = markdownTabContent
+        markdownTabItem.view = hostedTabView(for: markdownTabContent)
 
         let tabView = NSTabView()
         tabView.addTabViewItem(browserTabItem)
@@ -1526,6 +1568,10 @@ class AppDelegate: NSObject {
 
     @IBAction func setAsDefaultPress(sender: AnyObject) {
         setAsDefaultHttpHandler()
+        // Relabeled from "Set Default" to "OK" since this window has no other way to dismiss it —
+        // but only the title changed; it never actually closed the window, so clicking it looked
+        // like it did nothing (setAsDefaultHttpHandler() is a no-op once already default).
+        preferencesWindow.close()
     }
 
     func doDisclosure(sender: NSButton) {
@@ -1613,6 +1659,12 @@ extension AppDelegate: NSTabViewDelegate {
     // without this, a table there stays visually "not focused" (gray selection) even after being
     // clicked, since it was never actually made first responder.
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        // Force a layout pass as soon as a tab's content is actually part of the visible
+        // hierarchy, rather than waiting for whatever later event happens to trigger one.
+        DispatchQueue.main.async { [weak self] in
+            self?.preferencesWindow.contentView?.layoutSubtreeIfNeeded()
+        }
+
         guard let view = tabViewItem?.view, let tableView = findTableView(in: view) else {
             return
         }
@@ -1728,12 +1780,12 @@ extension AppDelegate: NSApplicationDelegate {
 
         blocklistTable.dataSource = blocklistDelegate
         blocklistTable.delegate = blocklistDelegate
-        blocklistDelegate.parent = self
+        blocklistDelegate.pool.appDelegate = self
         blocklistTable.usesAlternatingRowBackgroundColors = true
         if #available(macOS 11.0, *) {
             blocklistTable.style = .plain // avoid the newer inset/rounded-selection list appearance
         }
-        NotificationCenter.default.addObserver(blocklistDelegate, selector: #selector(BlocklistDelegate.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
+        NotificationCenter.default.addObserver(blocklistDelegate, selector: #selector(CheckboxBlocklistDataSource.windowResized(_:)), name: NSWindow.didResizeNotification, object: preferencesWindow)
 
         userAccessTable.dataSource = userAccessDelegate
         userAccessTable.delegate = userAccessDelegate
@@ -1867,38 +1919,84 @@ extension AppDelegate: NSApplicationDelegate {
     }
 }
 
-class BlocklistDelegate: NSObject {
-    weak var parent: AppDelegate?
+// Abstracts over the two checkbox-blocklist tables (browsers, markdown editors) so
+// CheckboxBlocklistDataSource below can drive either one without knowing which. appDelegate is
+// settable (rather than injected at init) because the pool is built as a stored property before
+// self is fully initialized — the same deferred-assignment pattern the old parent-per-delegate
+// design used.
+protocol BlocklistPool: AnyObject {
+    var appDelegate: AppDelegate? { get set }
+    var candidates: [String] { get }
+    var primary: String? { get }
+    var blocklist: [String] { get set }
+    var manuallyAdded: [String] { get } // bundle ids visually marked as manually added (italics)
+    var table: NSTableView? { get }
 }
 
-extension BlocklistDelegate: NSTableViewDataSource {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        parent?.validBrowsers.count ?? 0
+extension BlocklistPool {
+    var manuallyAdded: [String] { [] }
+}
+
+final class BrowserBlocklistPool: BlocklistPool {
+    weak var appDelegate: AppDelegate?
+    var candidates: [String] { appDelegate?.validBrowsers ?? [] }
+    var primary: String? { appDelegate?.defaults.primaryBrowser }
+    var blocklist: [String] {
+        get { appDelegate?.defaults.browserBlocklist ?? [] }
+        set { appDelegate?.defaults.browserBlocklist = newValue }
+    }
+    var table: NSTableView? { appDelegate?.blocklistTable }
+}
+
+final class EditorBlocklistPool: BlocklistPool {
+    weak var appDelegate: AppDelegate?
+    var candidates: [String] { appDelegate?.validEditors ?? [] }
+    var primary: String? { appDelegate?.defaults.primaryEditor }
+    var blocklist: [String] {
+        get { appDelegate?.defaults.editorBlocklist ?? [] }
+        set { appDelegate?.defaults.editorBlocklist = newValue }
+    }
+    var manuallyAdded: [String] { appDelegate?.defaults.additionalEditors ?? [] }
+    var table: NSTableView? { appDelegate?.editorBlocklistTable }
+}
+
+// Shared by the browser and markdown-editor blocklist tables — both are a list of candidate apps
+// with a primary (always disabled/unblockable) and a checkbox per row for blocklist membership,
+// independent of table selection. An earlier version drove membership from table selection
+// itself (selecting a row blocklisted it), which fought the list's own scroll-into-view behavior
+// on every selection change and made discontiguous ⌘-click selection unpredictable. A checkbox
+// avoids both problems.
+class CheckboxBlocklistDataSource: NSObject {
+    let pool: BlocklistPool
+
+    init(pool: BlocklistPool) {
+        self.pool = pool
     }
 }
 
-extension BlocklistDelegate: NSTableViewDelegate {
-    // The primary browser's checkbox is always unchecked and disabled (it can never be
-    // blocklisted), so its row shouldn't be selectable either — otherwise it can end up part of a
-    // multi-row selection whose checkbox-toggle silently skips it, which looks broken.
+extension CheckboxBlocklistDataSource: NSTableViewDataSource {
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        pool.candidates.count
+    }
+}
+
+extension CheckboxBlocklistDataSource: NSTableViewDelegate {
+    // The primary app's checkbox is always unchecked and disabled (it can never be blocklisted),
+    // so its row shouldn't be selectable either — otherwise it can end up part of a multi-row
+    // selection whose checkbox-toggle silently skips it, which looks broken.
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        guard let parent, parent.validBrowsers.indices.contains(row) else {
+        guard pool.candidates.indices.contains(row) else {
             return true
         }
-        return parent.validBrowsers[row] != parent.defaults.primaryBrowser
+        return pool.candidates[row] != pool.primary
     }
 
-    // Blocklist membership is a checkbox on each row, independent of table selection. An earlier
-    // version drove membership from table selection itself: selecting a row blocklisted it. That
-    // fought the list's own scroll-into-view behavior on every selection change (the list would
-    // jump to reveal the row whenever anything else refreshed the table, e.g. a menu update), and
-    // made discontiguous ⌘-click selection unpredictable. A checkbox avoids both problems.
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let parent, let col = tableColumn, parent.validBrowsers.indices.contains(row) else {
+        guard let appDelegate = pool.appDelegate, let col = tableColumn, pool.candidates.indices.contains(row) else {
             return nil
         }
-        let app = parent.validBrowsers[row]
-        let isPrimary = app == parent.defaults.primaryBrowser
+        let id = pool.candidates[row]
+        let isPrimary = id == pool.primary
 
         let cell: NSTableCellView
         let checkbox: NSButton
@@ -1948,167 +2046,21 @@ extension BlocklistDelegate: NSTableViewDelegate {
             checkbox = checkboxButton
         }
 
-        if let url = parent.workspace.urlForApplication(withBundleIdentifier: app) {
-            let image = parent.workspace.icon(forFile: url.relativePath)
+        if let url = appDelegate.workspace.urlForApplication(withBundleIdentifier: id) {
+            let image = appDelegate.workspace.icon(forFile: url.relativePath)
             image.size = NSSize(width: MENU_ITEM_HEIGHT, height: MENU_ITEM_HEIGHT)
             cell.imageView?.image = image
         }
-        cell.textField?.textColor = isPrimary ? .disabledControlTextColor : .controlTextColor
-        cell.textField?.stringValue = parent.appName(for: app)
-
-        checkbox.tag = row
-        checkbox.target = self
-        checkbox.action = #selector(checkboxToggled(sender:))
-        checkbox.state = (parent.defaults.browserBlocklist.contains(app) && !isPrimary) ? .on : .off
-        checkbox.isEnabled = !isPrimary
-        return cell
-    }
-
-    // The table's single column has resizeWithTable="YES" / columnAutoresizingStyle="lastColumnOnly"
-    // in the XIB, which normally keeps a table's last column in sync with the table's own width —
-    // but that redistribution never actually ran here on window resize, leaving the column pinned
-    // at its initial XIB width and a growing dead zone of table background to the right of the
-    // real content as the window widened. sizeToFit() forces the column to fill the table's
-    // current width.
-    @objc func windowResized(_ note: Notification) {
-        parent?.blocklistTable.sizeToFit()
-    }
-
-    @objc func checkboxToggled(sender: NSButton) {
-        guard let parent, parent.validBrowsers.indices.contains(sender.tag) else {
-            return
-        }
-        // If the toggled row is part of a multi-row selection, apply the same resulting state to
-        // every selected row instead of just the one that was clicked — matches the explanatory
-        // label ("check or uncheck multiple items by selecting more than one"), since a plain
-        // NSButton in a view-based table row has no built-in multi-row checkbox propagation the
-        // way a cell-based checkbox column does.
-        let table = parent.blocklistTable!
-        var rows: IndexSet = [sender.tag]
-        if table.selectedRowIndexes.contains(sender.tag) {
-            rows = table.selectedRowIndexes
-        }
-
-        let newState = sender.state == .on
-        var blocklist = parent.defaults.browserBlocklist
-        for row in rows {
-            guard parent.validBrowsers.indices.contains(row) else { continue }
-            let app = parent.validBrowsers[row]
-            guard app != parent.defaults.primaryBrowser else { continue }
-            if newState {
-                if !blocklist.contains(app) {
-                    blocklist.append(app)
-                }
-            } else {
-                blocklist.removeAll { $0 == app }
-            }
-        }
-        parent.defaults.browserBlocklist = blocklist
-        // Setting browserBlocklist triggers the KVO observer (resetBrowsers ->
-        // updateBlocklistTable), which reloads the table and preserves selection — no need to
-        // reload here too, and reloading twice was clearing the selection before that observer's
-        // preserve/restore logic ever got a chance to run.
-    }
-}
-
-class EditorBlocklistDataSource: NSObject {
-    weak var parent: AppDelegate?
-}
-
-extension EditorBlocklistDataSource: NSTableViewDataSource {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        parent?.validEditors.count ?? 0
-    }
-}
-
-extension EditorBlocklistDataSource: NSTableViewDelegate {
-    // The primary editor's checkbox is always unchecked and disabled (it can never be
-    // blocklisted), so its row shouldn't be selectable either — otherwise it can end up part of a
-    // multi-row selection whose checkbox-toggle silently skips it, which looks broken.
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        guard let parent, parent.validEditors.indices.contains(row) else {
-            return true
-        }
-        return parent.validEditors[row] != parent.defaults.primaryEditor
-    }
-
-    // Blocklist membership is a checkbox on each row, independent of table selection — row
-    // selection stays completely normal (single click selects just that row, ⌘/⇧ extend it) so
-    // it can be used for its one remaining job, picking rows to remove via Delete. An earlier
-    // version drove blocklist membership from table selection itself (mirroring the browser
-    // blocklist), which fought the list's own scroll-into-view behavior on every click and made
-    // deleting a specific manually-added editor impractical (selecting it for deletion also
-    // toggled its blocklist membership). Checkboxes avoid both problems entirely rather than
-    // patching around them.
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let parent, let col = tableColumn, parent.validEditors.indices.contains(row) else {
-            return nil
-        }
-        let bid = parent.validEditors[row]
-        let isPrimary = bid == parent.defaults.primaryEditor
-
-        let cell: NSTableCellView
-        let checkbox: NSButton
-        if let reused = tableView.makeView(withIdentifier: col.identifier, owner: self) as? NSTableCellView,
-           let reusedCheckbox = reused.subviews.first(where: { $0 is NSButton }) as? NSButton {
-            cell = reused
-            checkbox = reusedCheckbox
-        } else {
-            cell = NSTableCellView()
-            cell.identifier = col.identifier
-            // A view built from scratch (rather than an IB-authored cell template) has no
-            // autoresizing mask by default, so it never tracks the row's width as the column
-            // resizes — it just keeps whatever frame it had when first created. widthSizable
-            // makes it stretch with the row the same way an IB-authored cell would.
-            cell.autoresizingMask = [.width, .height]
-
-            let imageView = NSImageView()
-            imageView.translatesAutoresizingMaskIntoConstraints = false
-            let textField = NSTextField(labelWithString: "")
-            textField.translatesAutoresizingMaskIntoConstraints = false
-            textField.lineBreakMode = .byTruncatingTail
-            let checkboxButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-            checkboxButton.translatesAutoresizingMaskIntoConstraints = false
-
-            cell.addSubview(imageView)
-            cell.addSubview(textField)
-            cell.addSubview(checkboxButton)
-            cell.imageView = imageView
-            cell.textField = textField
-
-            NSLayoutConstraint.activate([
-                imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 5),
-                imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                imageView.widthAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
-                imageView.heightAnchor.constraint(equalToConstant: MENU_ITEM_HEIGHT),
-                textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
-                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                // Indented by the overlay scrollbar's width in addition to the usual 5pt inset, so
-                // the scroller doesn't cover the checkboxes when it appears.
-                checkboxButton.trailingAnchor.constraint(
-                    equalTo: cell.trailingAnchor,
-                    constant: -(5 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay))
-                ),
-                checkboxButton.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                textField.trailingAnchor.constraint(lessThanOrEqualTo: checkboxButton.leadingAnchor, constant: -8),
-            ])
-            checkbox = checkboxButton
-        }
-
-        if let url = parent.workspace.urlForApplication(withBundleIdentifier: bid) {
-            let image = parent.workspace.icon(forFile: url.relativePath)
-            image.size = NSSize(width: MENU_ITEM_HEIGHT, height: MENU_ITEM_HEIGHT)
-            cell.imageView?.image = image
-        }
-        // Manually-added editors (via "Add Editor…") are visually distinguished with a slant.
-        // Neither NSFontManager.convert(_:toHaveTrait:) nor NSFontDescriptor symbolic traits
-        // reliably produce a distinct italic face for the system font (both can silently no-op) —
+        // Manually-added apps (via "Add Editor…" — browsers have no such mechanism, so this is
+        // always empty there) are visually distinguished with a slant. Neither
+        // NSFontManager.convert(_:toHaveTrait:) nor NSFontDescriptor symbolic traits reliably
+        // produce a distinct italic face for the system font (both can silently no-op) —
         // .obliqueness applies a shear transform to the glyphs directly, which works regardless of
         // whether the font has a true italic design.
-        let isManuallyAdded = parent.defaults.additionalEditors.contains(bid)
+        let isManuallyAdded = pool.manuallyAdded.contains(id)
         let baseFont = cell.textField?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let textColor: NSColor = isPrimary ? .disabledControlTextColor : .controlTextColor
-        let name = parent.appName(for: bid)
+        let name = appDelegate.appName(for: id)
         if isManuallyAdded {
             cell.textField?.attributedStringValue = NSAttributedString(
                 string: name,
@@ -2123,22 +2075,24 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         checkbox.tag = row
         checkbox.target = self
         checkbox.action = #selector(checkboxToggled(sender:))
-        checkbox.state = (parent.defaults.editorBlocklist.contains(bid) && !isPrimary) ? .on : .off
+        checkbox.state = (pool.blocklist.contains(id) && !isPrimary) ? .on : .off
         checkbox.isEnabled = !isPrimary
         return cell
     }
 
-    // This table's column is never given a columnAutoresizingStyle, so it never resizes on its
-    // own as the table's width changes (the table/scrollview itself does correctly track the
-    // tab's width via the widthAnchor chain in setupPreferencesTabs — it's specifically the
-    // column inside it that stays pinned at its initial width). sizeToFit() forces the column to
-    // fill the table's current width.
+    // Some of these tables' columns never actually resize as the table's own width changes (the
+    // browser table's XIB-declared resizeWithTable="YES"/columnAutoresizingStyle="lastColumnOnly"
+    // never took effect on resize; the editor table's column is never given a
+    // columnAutoresizingStyle at all) — the table/scrollview itself tracks the window correctly,
+    // it's specifically the column inside it that stays pinned at its initial width, leaving a
+    // growing dead zone of table background to the right of the real content. sizeToFit() forces
+    // the column to fill the table's current width.
     @objc func windowResized(_ note: Notification) {
-        parent?.editorBlocklistTable?.sizeToFit()
+        pool.table?.sizeToFit()
     }
 
     @objc func checkboxToggled(sender: NSButton) {
-        guard let parent, parent.validEditors.indices.contains(sender.tag) else {
+        guard pool.candidates.indices.contains(sender.tag), let table = pool.table else {
             return
         }
         // If the toggled row is part of a multi-row selection, apply the same resulting state to
@@ -2147,29 +2101,30 @@ extension EditorBlocklistDataSource: NSTableViewDelegate {
         // NSButton in a view-based table row has no built-in multi-row checkbox propagation the
         // way a cell-based checkbox column does.
         var rows: IndexSet = [sender.tag]
-        if let table = parent.editorBlocklistTable, table.selectedRowIndexes.contains(sender.tag) {
+        if table.selectedRowIndexes.contains(sender.tag) {
             rows = table.selectedRowIndexes
         }
 
         let newState = sender.state == .on
-        var blocklist = parent.defaults.editorBlocklist
+        var blocklist = pool.blocklist
         for row in rows {
-            guard parent.validEditors.indices.contains(row) else { continue }
-            let bid = parent.validEditors[row]
-            guard bid != parent.defaults.primaryEditor else { continue }
+            guard pool.candidates.indices.contains(row) else { continue }
+            let id = pool.candidates[row]
+            guard id != pool.primary else { continue }
             if newState {
-                if !blocklist.contains(bid) {
-                    blocklist.append(bid)
+                if !blocklist.contains(id) {
+                    blocklist.append(id)
                 }
             } else {
-                blocklist.removeAll { $0 == bid }
+                blocklist.removeAll { $0 == id }
             }
         }
-        parent.defaults.editorBlocklist = blocklist
-        // Setting editorBlocklist triggers the KVO observer (resetEditors ->
-        // updateEditorBlocklistTable), which reloads the table and preserves selection — no need
-        // to reload here too, and reloading twice was clearing the selection before that
-        // observer's preserve/restore logic ever got a chance to run.
+        pool.blocklist = blocklist
+        // Setting blocklist triggers the browserBlocklist/editorBlocklist KVO observer
+        // (resetBrowsers/resetEditors -> updateBlocklistTable/updateEditorBlocklistTable), which
+        // reloads the table and preserves selection — no need to reload here too, and reloading
+        // twice was clearing the selection before that observer's preserve/restore logic ever got
+        // a chance to run.
     }
 }
 

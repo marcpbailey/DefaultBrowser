@@ -594,8 +594,11 @@
                                             <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                                         </textFieldCell>
                                     </textField>
-                                    <customView verticalHuggingPriority="1" translatesAutoresizingMaskIntoConstraints="NO" id="KhJ-ct-OvA">
+                                    <customView horizontalHuggingPriority="1" horizontalCompressionResistancePriority="1" verticalHuggingPriority="1" translatesAutoresizingMaskIntoConstraints="NO" id="KhJ-ct-OvA">
                                         <rect key="frame" x="175" y="0.0" width="400" height="532"/>
+                                        <constraints>
+                                            <constraint firstAttribute="height" constant="24" id="KhJ-Height"/>
+                                        </constraints>
                                     </customView>
                                     <button verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="qoX-l6-UOL">
                                         <rect key="frame" x="583" y="254" width="91" height="24"/>
