@@ -17,6 +17,8 @@ enum MenuItemTag: Int {
     case BrowserListTop = 1
     case BrowserListBottom
     case usePrimary
+    case EditorListTop
+    case EditorListBottom
 }
 
 // Height of each menu item's icon
@@ -78,9 +80,15 @@ class AppDelegate: NSObject {
     var validBrowsers: [String] = []
     var userScopedBrowsers: [URL] = []
 
+    // a list of all valid markdown editors installed (always includes Obsidian, which is
+    // vault-gated separately rather than discovered — see ObsidianVault.swift)
+    var validEditors: [String] = []
+    var userScopedEditors: [URL] = []
+
     let blocklistDelegate = BlocklistDelegate()
     let userAccessDelegate = UserAccessBrowserDelegate()
     let bookmarksDelegate = BookmarksDelegate()
+    let editorBlocklistDataSource = EditorBlocklistDataSource()
 
     // keep an ordered list of running browsers
     var runningBrowsers: [NSRunningApplication] = []
@@ -93,8 +101,14 @@ class AppDelegate: NSObject {
         })
     }
 
+    // keep an ordered list of running markdown editors
+    var runningEditors: [NSRunningApplication] = []
+
     // an explicitly chosen default browser
     var explicitBrowser: String? = nil
+
+    // an explicitly chosen default markdown editor
+    var explicitEditor: String? = nil
 
     // the user's "system" default browser
     var usePrimaryBrowser: Bool? = false
@@ -107,6 +121,12 @@ class AppDelegate: NSObject {
 
     var primaryBrowserObserver: NSKeyValueObservation?
     var blockedBrowserObserver: NSKeyValueObservation?
+    var primaryEditorObserver: NSKeyValueObservation?
+    var blockedEditorObserver: NSKeyValueObservation?
+
+    // Built programmatically rather than as XIB-connected IBOutlets — see setupEditorPreferencesSection()
+    var editorsPopUp: NSPopUpButton?
+    var editorBlocklistTable: NSTableView?
 
     // MARK: Signal/Notification Responses
 
@@ -173,12 +193,16 @@ class AppDelegate: NSObject {
         }
 
         updateBrowsers(apps: apps)
+        updateEditors(apps: apps)
     }
 
     // Respond to the user changing applications
     @objc func applicationChange(notification: NSNotification) {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             runningBrowsers.sort { a, _ in
+                a.bundleIdentifier == app.bundleIdentifier
+            }
+            runningEditors.sort { a, _ in
                 a.bundleIdentifier == app.bundleIdentifier
             }
             updateMenuItems()
@@ -216,6 +240,46 @@ class AppDelegate: NSObject {
         return true
     }
 
+    // Open markdown files with the MRU-selected editor, routing through Obsidian's obsidian://
+    // URL scheme (rather than a plain launch) when the file lives inside one of its vaults.
+    func openMarkdownFiles(urls: [URL]) -> Bool {
+        guard let firstFile = urls.first else {
+            return false
+        }
+
+        guard let theEditor = getOpeningEditorId(forFile: firstFile) else {
+            let noEditorAlert = NSAlert()
+            noEditorAlert.messageText = "No Markdown Editors Found"
+            noEditorAlert.informativeText = "\(selfName) couldn't find any installed markdown editors to use. Install something!"
+            noEditorAlert.alertStyle = .warning
+            noEditorAlert.runModal()
+            return false
+        }
+
+        if theEditor == obsidianBundleId {
+            guard let obsidianUrl = ObsidianVault.openURL(for: firstFile) else {
+                return false
+            }
+            print("opening: \(firstFile) in Obsidian via \(obsidianUrl)")
+            workspace.open(obsidianUrl)
+            return true
+        }
+
+        guard let editorUrl = workspace.urlForApplication(withBundleIdentifier: theEditor) else {
+            let alert = NSAlert()
+            alert.messageText = "Editor Not Found"
+            alert.informativeText = "\(selfName) couldn't find \(theEditor)."
+            alert.alertStyle = .warning
+            alert.runModal()
+            return false
+        }
+
+        print("opening: \(urls) in \(theEditor)")
+        let openConfiguration = NSWorkspace.OpenConfiguration()
+        workspace.open(urls, withApplicationAt: editorUrl, configuration: openConfiguration)
+        return true
+    }
+
     // MARK: Management Methods
 
     private func updatePreferencesBrowsersPopup() {
@@ -231,6 +295,24 @@ class AppDelegate: NSObject {
             browsersPopUp.menu?.addItem(menuItem)
         }
         browsersPopUp.select(selectedPrimaryBrowser)
+    }
+
+    // Editor preferences UI is built programmatically (see setupEditorPreferencesSection), so
+    // these outlets may not exist yet on first call — no-op until they're constructed.
+    private func updatePreferencesEditorsPopup() {
+        guard let editorsPopUp else { return }
+        editorsPopUp.removeAllItems()
+        var selectedPrimaryEditor: NSMenuItem? = nil
+        for bid in validEditors {
+            let menuItem = BrowserMenuItem(title: appName(for: bid), action: nil, keyEquivalent: "")
+            menuItem.height = MENU_ITEM_HEIGHT
+            menuItem.bundleIdentifier = bid
+            if defaults.primaryEditor?.lowercased() == bid.lowercased() {
+                selectedPrimaryEditor = menuItem
+            }
+            editorsPopUp.menu?.addItem(menuItem)
+        }
+        editorsPopUp.select(selectedPrimaryEditor)
     }
 
     private var menuBarCases = MenuBarIconStyle.allCases.flatMap({ [(true, $0), (false, $0)] })
@@ -290,6 +372,26 @@ class AppDelegate: NSObject {
         }
     }
 
+    // update list of currently running markdown editors
+    func updateEditors(apps: [NSRunningApplication]?) {
+        if let apps = apps {
+            for app in apps.filter({ $0.bundleIdentifier != nil }) {
+                let remove = app.isTerminated // insert or remove?
+
+                if (validEditors.contains(app.bundleIdentifier!)) {
+                    if remove {
+                        if let index = runningEditors.firstIndex(of: app) {
+                            runningEditors.remove(at: index)
+                        }
+                    } else {
+                        runningEditors.append(app)
+                    }
+                }
+            }
+            updateMenuItems()
+        }
+    }
+
     // decide which browser should be used to open a link
     func getOpeningBrowserId() -> String? {
         // if usePrimaryBrowser is true, use that
@@ -318,6 +420,40 @@ class AppDelegate: NSObject {
         // if no primary browser is chosen, pick the first non-blocked one
         if let firstAvailableBrowser = validBrowsers.filter({ blocklist.contains($0) }).first {
             return firstAvailableBrowser
+        }
+        return nil
+    }
+
+    // decide which markdown editor should be used to open a file. Obsidian is excluded unless
+    // the file actually lives inside one of its registered vaults — it can't sensibly open
+    // anything else, so it isn't a valid candidate at all in that case.
+    func getOpeningEditorId(forFile file: URL) -> String? {
+        let fileIsInVault = ObsidianVault.contains(file)
+        let blocklist = defaults.editorBlocklist
+        func isEligible(_ bundleId: String) -> Bool {
+            if bundleId == obsidianBundleId && !fileIsInVault {
+                return false
+            }
+            return !blocklist.contains(bundleId)
+        }
+
+        // if an explicit editor is chosen, use that
+        if let explicitEditor, isEligible(explicitEditor) {
+            return explicitEditor
+        }
+        // use the last used editor that's running
+        if let firstRunningEditor = runningEditors
+            .filter({ isEligible($0.bundleIdentifier ?? "") })
+            .first?.bundleIdentifier {
+            return firstRunningEditor
+        }
+        // if no eligible editors are running, use the primary one
+        if let primaryEditor = defaults.primaryEditor, isEligible(primaryEditor) {
+            return primaryEditor
+        }
+        // if no primary editor is chosen, pick the first eligible one
+        if let firstAvailableEditor = validEditors.filter({ isEligible($0) }).first {
+            return firstAvailableEditor
         }
         return nil
     }
@@ -537,6 +673,21 @@ class AppDelegate: NSObject {
         }
     }
 
+    // reset lists of markdown editors
+    func resetEditors() {
+        validEditors = getAllEditors(defaults: defaults)
+        userScopedEditors = getUserScopedEditors(defaults: defaults)
+        runningEditors = []
+        updateEditors(apps: workspace.runningApplications.sorted { a, _ in
+            (a.bundleIdentifier ?? "") == defaults.primaryEditor
+        })
+        // Defer updates to avoid layout recursion
+        DispatchQueue.main.async {
+            self.updateEditorBlocklistTable()
+            self.updatePreferencesEditorsPopup()
+        }
+    }
+
     private var iconCache = NSCache<IconCacheKey, NSImage>()
 
     func getMenuBarIcon(for bundleId: String) -> NSImage? {
@@ -657,6 +808,52 @@ class AppDelegate: NSObject {
         case .some(let wrapped):
             item.state = wrapped ? .on : .off
         }
+
+        // populate the markdown editor section, mirroring the browser section above
+        let editorTop = menu.indexOfItem(withTag: MenuItemTag.EditorListTop.rawValue)
+        let editorBottom = menu.indexOfItem(withTag: MenuItemTag.EditorListBottom.rawValue)
+        for i in ((editorTop+1)..<editorBottom).reversed() {
+            statusItem.menu?.removeItem(at: i)
+        }
+
+        var editorIdx = editorTop + 1
+
+        let menuEditors = validEditors
+            .filter({ editor in
+                !defaults.editorBlocklist.contains(where: { blockedEditor in
+                    editor == blockedEditor
+                })
+            })
+            .sorted { appName(for: $0) < appName(for: $1) }
+
+        for editor in menuEditors {
+            let editorItem = BrowserMenuItem(
+                title: appName(for: editor),
+                action: #selector(selectEditor),
+                keyEquivalent: ""
+            )
+            editorItem.height = MENU_ITEM_HEIGHT
+            editorItem.bundleIdentifier = editor
+            if !runningEditors.contains(where: { $0.bundleIdentifier == editor }) {
+                editorItem.image = editorItem.image?.withAlpha(0.5)
+            }
+            if editorItem.bundleIdentifier == explicitEditor {
+                editorItem.state = .on
+            }
+            menu.insertItem(editorItem, at: editorIdx)
+            editorIdx += 1
+        }
+        if let explicitEditor, !menuEditors.contains(where: { $0 == explicitEditor }) {
+            let editorItem = BrowserMenuItem(
+                title: appName(for: explicitEditor),
+                action: #selector(selectEditor),
+                keyEquivalent: ""
+            )
+            editorItem.height = MENU_ITEM_HEIGHT
+            editorItem.bundleIdentifier = explicitEditor
+            editorItem.state = .on
+            menu.insertItem(editorItem, at: editorIdx)
+        }
     }
 
     // refresh blocklist bar ui
@@ -673,6 +870,102 @@ class AppDelegate: NSObject {
         }
         blocklistTable.deselectAll(self)
         blocklistTable.selectRowIndexes(selectedRows as IndexSet, byExtendingSelection: false)
+    }
+
+    private func updateEditorBlocklistTable() {
+        guard let editorBlocklistTable else { return }
+        editorBlocklistTable.needsDisplay = true
+        editorBlocklistTable.reloadData()
+        let blocklist = defaults.editorBlocklist
+        let primaryDefault = defaults.primaryEditor
+        let selectedRows = NSMutableIndexSet()
+        validEditors.enumerated().forEach { (i, editor) in
+            if (blocklist.contains(editor) && primaryDefault != editor) {
+                selectedRows.add(i)
+            }
+        }
+        editorBlocklistTable.deselectAll(self)
+        editorBlocklistTable.selectRowIndexes(selectedRows as IndexSet, byExtendingSelection: false)
+    }
+
+    // Finds a stack view by its Interface Builder `identifier` attribute. Used to attach the
+    // programmatically-built editor preferences section (see setupEditorPreferencesSection) to
+    // the existing "mainWrapper" stack view without editing MainMenu.xib by hand.
+    private func findStackView(identifier: String, in view: NSView) -> NSStackView? {
+        if let stack = view as? NSStackView, stack.identifier?.rawValue == identifier {
+            return stack
+        }
+        for subview in view.subviews {
+            if let found = findStackView(identifier: identifier, in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    // Builds the "Markdown Editor" preferences section in code and appends it to the existing
+    // preferences window, rather than adding new IBOutlets/IBActions to MainMenu.xib. Mirrors the
+    // browser blocklist section's behavior (multi-select table = blocklist) with a simpler,
+    // always-visible layout.
+    private func setupEditorPreferencesSection() {
+        guard let contentView = preferencesWindow.contentView,
+              let mainWrapper = findStackView(identifier: "mainWrapper", in: contentView) else {
+            print("couldn't find mainWrapper stack view; skipping editor preferences UI")
+            return
+        }
+
+        let header = NSTextField(labelWithString: "Markdown Editor")
+        header.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+
+        let primaryLabel = NSTextField(labelWithString: "Primary Markdown Editor:")
+        let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        popUp.target = self
+        popUp.action = #selector(primaryEditorPopUpChange(sender:))
+        editorsPopUp = popUp
+
+        let primaryRow = NSStackView(views: [primaryLabel, popUp])
+        primaryRow.orientation = .horizontal
+        primaryRow.alignment = .centerY
+
+        let explanation = NSTextField(wrappingLabelWithString: "Editors selected below will never be opened by \(selfName), even if last used. Hold ⌘ or ⇧ to select multiple or deselect.")
+        explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        explanation.textColor = .secondaryLabelColor
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("editorNameColumn"))
+        column.title = "Editor"
+        column.width = 300
+
+        let table = NSTableView()
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.allowsMultipleSelection = true
+        table.rowSizeStyle = .default
+        table.dataSource = editorBlocklistDataSource
+        table.delegate = editorBlocklistDataSource
+        editorBlocklistDataSource.parent = self
+        editorBlocklistTable = table
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = table
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.widthAnchor.constraint(equalToConstant: 351).isActive = true
+        scrollView.heightAnchor.constraint(equalToConstant: 120).isActive = true
+
+        let clearButton = NSButton(title: "Clear", target: self, action: #selector(editorBlocklistClearPress(sender:)))
+
+        let section = NSStackView(views: [header, primaryRow, explanation, scrollView, clearButton])
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 8
+
+        mainWrapper.addArrangedSubview(section)
+
+        preferencesWindow.layoutIfNeeded()
+        if let contentView = preferencesWindow.contentView {
+            preferencesWindow.setContentSize(contentView.fittingSize)
+        }
     }
 
     private func updateBookmarksTable() {
@@ -720,6 +1013,22 @@ class AppDelegate: NSObject {
         }
 
         explicitBrowser = bundleId
+        updateMenuItems()
+    }
+
+    // user clicked a markdown editor from the menu
+    @objc func selectEditor(sender: NSMenuItem) {
+        if let menuItem = sender as? BrowserMenuItem {
+            if explicitEditor == menuItem.bundleIdentifier {
+                setExplicitEditor(bundleId: nil)
+            } else {
+                setExplicitEditor(bundleId: menuItem.bundleIdentifier)
+            }
+        }
+    }
+
+    func setExplicitEditor(bundleId: String?) {
+        explicitEditor = bundleId
         updateMenuItems()
     }
 
@@ -780,6 +1089,14 @@ class AppDelegate: NSObject {
         let usePrimaryMenuItem = NSMenuItem(title: "Use Primary Browser", action: #selector(usePrimary), keyEquivalent: "0")
         usePrimaryMenuItem.tag = MenuItemTag.usePrimary.rawValue
         statusMenu.addItem(usePrimaryMenuItem)
+        statusMenu.addItem(NSMenuItem.separator())
+        statusMenu.addItem(NSMenuItem(title: "Markdown Editor", action: nil, keyEquivalent: ""))
+        let editorListTop = NSMenuItem.separator()
+        editorListTop.tag = MenuItemTag.EditorListTop.rawValue
+        statusMenu.addItem(editorListTop)
+        let editorListBottom = NSMenuItem.separator()
+        editorListBottom.tag = MenuItemTag.EditorListBottom.rawValue
+        statusMenu.addItem(editorListBottom)
         statusMenu.addItem(quit())
         statusItem.menu = statusMenu
         
@@ -895,6 +1212,19 @@ class AppDelegate: NSObject {
         }
     }
 
+    @objc func primaryEditorPopUpChange(sender: NSPopUpButton) {
+        guard let item = sender.selectedItem as? BrowserMenuItem,
+              let bid = item.bundleIdentifier else {
+            return
+        }
+        defaults.primaryEditor = bid
+        defaults.editorBlocklist = defaults.editorBlocklist.filter { $0 != bid }
+        DispatchQueue.main.async {
+            self.updateEditorBlocklistTable()
+            self.updateMenuItems()
+        }
+    }
+
     @IBAction func menuBarIconPopupChange(sender: NSPopUpButton) {
         guard let item = sender.selectedItem as? MenuBarIconMenuItem,
         let template = item.template,
@@ -956,6 +1286,10 @@ class AppDelegate: NSObject {
     @IBAction func blocklistClearPress(sender: NSButton) {
         defaults.browserBlocklist.removeAll()
     }
+
+    @objc func editorBlocklistClearPress(sender: NSButton) {
+        defaults.editorBlocklist.removeAll()
+    }
 }
 
 extension AppDelegate: NSApplicationDelegate {
@@ -992,6 +1326,16 @@ extension AppDelegate: NSApplicationDelegate {
         blockedBrowserObserver = defaults.observe(\.BrowserBlocklist) { _, _ in
             DispatchQueue.main.async {
                 self.resetBrowsers()
+            }
+        }
+        primaryEditorObserver = defaults.observe(\.PrimaryEditor) { _, _ in
+            DispatchQueue.main.async {
+                self.resetEditors()
+            }
+        }
+        blockedEditorObserver = defaults.observe(\.EditorBlocklist) { _, _ in
+            DispatchQueue.main.async {
+                self.resetEditors()
             }
         }
     }
@@ -1035,8 +1379,10 @@ extension AppDelegate: NSApplicationDelegate {
         }
 
         setupMenus()
+        setupEditorPreferencesSection()
 
         resetBrowsers()
+        resetEditors()
         updateMenuItems()
         updateMenuBarIconPopUp()
 
@@ -1130,14 +1476,31 @@ extension AppDelegate: NSApplicationDelegate {
         workspace.notificationCenter.removeObserver(self, name: NSWorkspace.didActivateApplicationNotification, object: nil)
         NSAppleEventManager.shared().removeEventHandler(forEventClass: UInt32(kInternetEventClass), andEventID: UInt32(kAEGetURL))
         primaryBrowserObserver?.invalidate()
+        primaryEditorObserver?.invalidate()
+    }
+
+    private func isMarkdownFile(_ url: URL) -> Bool {
+        markdownEditorQualifyingExtensions.contains(url.pathExtension.lowercased())
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        openUrls(urls: [URL(fileURLWithPath: filename)], additionalEventParamDescriptor: nil)
+        let url = URL(fileURLWithPath: filename)
+        if isMarkdownFile(url) {
+            return openMarkdownFiles(urls: [url])
+        }
+        return openUrls(urls: [url], additionalEventParamDescriptor: nil)
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        _ = openUrls(urls: filenames.map({ URL(fileURLWithPath: $0) }), additionalEventParamDescriptor: nil)
+        let urls = filenames.map { URL(fileURLWithPath: $0) }
+        let markdownUrls = urls.filter(isMarkdownFile)
+        let otherUrls = urls.filter { !isMarkdownFile($0) }
+        if !markdownUrls.isEmpty {
+            _ = openMarkdownFiles(urls: markdownUrls)
+        }
+        if !otherUrls.isEmpty {
+            _ = openUrls(urls: otherUrls, additionalEventParamDescriptor: nil)
+        }
     }
 
     @available(macOS 11.0, *)
@@ -1205,6 +1568,42 @@ extension BlocklistDelegate: NSTableViewDelegate {
             .filter { $0 != parent.defaults.primaryBrowser }
         if let primaryBrowser = parent.defaults.primaryBrowser,
            let primaryIndex = parent.validBrowsers.firstIndex(of: primaryBrowser) {
+            let newSelection = NSMutableIndexSet(indexSet: proposedSelectionIndexes)
+            newSelection.remove(primaryIndex)
+            return newSelection as IndexSet
+        }
+        return proposedSelectionIndexes
+    }
+}
+
+class EditorBlocklistDataSource: NSObject {
+    weak var parent: AppDelegate?
+}
+
+extension EditorBlocklistDataSource: NSTableViewDataSource {
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        parent?.validEditors.count ?? 0
+    }
+}
+
+extension EditorBlocklistDataSource: NSTableViewDelegate {
+    func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
+        guard let parent, parent.validEditors.indices.contains(row) else {
+            return nil
+        }
+        return parent.appName(for: parent.validEditors[row])
+    }
+
+    func tableView(_ tableView: NSTableView, selectionIndexesForProposedSelection proposedSelectionIndexes: IndexSet) -> IndexSet {
+        guard let parent else {
+            return proposedSelectionIndexes
+        }
+
+        parent.defaults.editorBlocklist = proposedSelectionIndexes
+            .compactMap { parent.validEditors.indices.contains($0) ? parent.validEditors[$0] : nil }
+            .filter { $0 != parent.defaults.primaryEditor }
+        if let primaryEditor = parent.defaults.primaryEditor,
+           let primaryIndex = parent.validEditors.firstIndex(of: primaryEditor) {
             let newSelection = NSMutableIndexSet(indexSet: proposedSelectionIndexes)
             newSelection.remove(primaryIndex)
             return newSelection as IndexSet
