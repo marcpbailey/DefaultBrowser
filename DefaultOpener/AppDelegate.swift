@@ -994,10 +994,20 @@ class AppDelegate: NSObject {
         return nil
     }
 
-    // Builds the "Markdown Editor" preferences section in code and appends it to the existing
-    // preferences window, rather than adding new IBOutlets/IBActions to MainMenu.xib. Mirrors the
-    // browser blocklist section's behavior (multi-select table = blocklist) with a simpler,
-    // always-visible layout.
+    // Depth-first search for the first NSTableView anywhere within `view` — used to find the
+    // table inside a just-selected tab's content so it can be made first responder.
+    private func findTableView(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView {
+            return table
+        }
+        for subview in view.subviews {
+            if let found = findTableView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
     // Builds the "Markdown Editor" preferences content (primary editor popup + blocklist table)
     // without attaching it anywhere — setupPreferencesTabs places it in the "Markdown" tab.
     private func buildEditorPreferencesSection() -> NSStackView {
@@ -1040,13 +1050,24 @@ class AppDelegate: NSObject {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.widthAnchor.constraint(equalToConstant: 351).isActive = true
-        scrollView.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        scrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
+        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
+        // The scroll view (and only the scroll view) should absorb any extra space this section
+        // is given — without an explicit low priority here, Auto Layout has no clear tie-breaker
+        // for where leftover vertical space goes, and can resolve it differently across layout
+        // passes (e.g. on window activation or tab switches), which showed up as the whole
+        // section appearing to "jump" to the bottom of the tab.
+        scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        scrollView.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let clearButton = NSButton(title: "Clear", target: self, action: #selector(editorBlocklistClearPress(sender:)))
         let addEditorButton = NSButton(title: "Add Editor…", target: self, action: #selector(addEditorPress(sender:)))
         let buttonRow = NSStackView(views: [clearButton, addEditorButton])
         buttonRow.orientation = .horizontal
+        buttonRow.setContentHuggingPriority(.required, for: .vertical)
+
+        primaryRow.setContentHuggingPriority(.required, for: .vertical)
+        explanation.setContentHuggingPriority(.required, for: .vertical)
 
         let section = NSStackView(views: [primaryRow, explanation, scrollView, buttonRow])
         section.orientation = .vertical
@@ -1106,8 +1127,15 @@ class AppDelegate: NSObject {
         tabView.addTabViewItem(browserTabItem)
         tabView.addTabViewItem(markdownTabItem)
         tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.delegate = self
 
         topWrapper.insertArrangedSubview(tabView, at: min(insertionIndex, topWrapper.arrangedSubviews.count))
+
+        // Switching tabs doesn't hand keyboard focus to anything in the newly-shown tab on its
+        // own, so a table there stays visually "not focused" (gray selection) even after the user
+        // clicks a row — until something explicitly makes it first responder. tabView(_:didSelect:)
+        // below handles this on every switch; call it once now for whichever tab starts selected.
+        self.tabView(tabView, didSelect: tabView.selectedTabViewItem)
 
         // mainWrapper (topWrapper's container) has a plain NSView spacer between topWrapper and the
         // "not default browser" warning row, with a very low hugging priority so it stretches to
@@ -1501,6 +1529,18 @@ class AppDelegate: NSObject {
             }
             self.resetEditors()
         }
+    }
+}
+
+extension AppDelegate: NSTabViewDelegate {
+    // Switching tabs doesn't hand keyboard focus to anything in the newly-shown tab on its own —
+    // without this, a table there stays visually "not focused" (gray selection) even after being
+    // clicked, since it was never actually made first responder.
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        guard let view = tabViewItem?.view, let tableView = findTableView(in: view) else {
+            return
+        }
+        preferencesWindow.makeFirstResponder(tableView)
     }
 }
 
