@@ -11,6 +11,30 @@ import CoreServices
 import Intents
 import ServiceManagement
 import UniformTypeIdentifiers
+import os
+
+// Diagnostic logging for the markdown-editor open path, off by default — enable with
+// `defaults write com.marcbailey.defaultopener DebugLoggingEnabled -bool true`, and optionally
+// mirror to a file with `defaults write com.marcbailey.defaultopener DebugLogFilePath -string <path>`.
+// Uses the function-based os_log API with an explicit %{public}@ format specifier, since the
+// unified logging system otherwise redacts dynamic content as <private>, and the newer Logger
+// struct needs macOS 11+ while this project's deployment target is macOS 10.15.
+private let diagLog = OSLog(subsystem: "com.marcbailey.defaultopener", category: "diag")
+private let diagDefaults = ThisDefaults()
+private func diagLogPublic(_ message: String) {
+    guard diagDefaults.debugLoggingEnabled else { return }
+    os_log("%{public}@", log: diagLog, message)
+    guard let path = diagDefaults.debugLogFilePath else { return }
+    let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    if let handle = FileHandle(forWritingAtPath: path) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        handle.closeFile()
+    } else {
+        try? data.write(to: URL(fileURLWithPath: path))
+    }
+}
 
 // Menu item tags used to fetch them without a direct reference
 enum MenuItemTag: Int {
@@ -143,6 +167,7 @@ class AppDelegate: NSObject {
     var editorsPopUp: NSPopUpButton?
     var editorBlocklistTable: NSTableView?
     var editorBlocklistScrollView: NSScrollView?
+    var detectObsidianVaultsCheckbox: NSButton?
     var editorExplanationLabel: NSTextField?
     var editorDeleteExplanationLabel: NSTextField?
 
@@ -150,10 +175,12 @@ class AppDelegate: NSObject {
 
     // Respond to the user opening a link
     @objc func handleGetURLEvent(event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        diagLogPublic("handleGetURLEvent ENTRY: event=\(String(describing: event))")
         // not sure if the format always matches what I expect
         if let urlDescriptor = event.atIndex(1),
            let urlStr = urlDescriptor.stringValue,
            let url = URL(string: urlStr) {
+            diagLogPublic("handleGetURLEvent parsed url=\(url.absoluteString) isFileURL=\(url.isFileURL) isMarkdownFile=\(self.isMarkdownFile(url))")
             // The app also registers CFBundleURLTypes for the "file" scheme (inherited from
             // DefaultBrowser, so file:// links can be opened in the MRU browser too). On current
             // macOS, that means Finder/LaunchServices deliver essentially all file opens — not
@@ -281,12 +308,14 @@ class AppDelegate: NSObject {
     // been kicked off) — not currently used by any caller, but kept since the completion-handler
     // variants of NSWorkspace.open are also how we detect/log a failed hand-off.
     func openMarkdownFiles(urls: [URL], completion: (() -> Void)? = nil) -> Bool {
+        diagLogPublic("openMarkdownFiles ENTRY: urls=\(urls.map(\.path).joined(separator: ", "))")
         guard let firstFile = urls.first else {
             completion?()
             return false
         }
 
         guard let theEditor = getOpeningEditorId(forFile: firstFile) else {
+            diagLogPublic("openMarkdownFiles: getOpeningEditorId returned nil")
             let noEditorAlert = NSAlert()
             noEditorAlert.messageText = "No Markdown Editors Found"
             noEditorAlert.informativeText = "\(selfName) couldn't find any installed markdown editors to use. Install something!"
@@ -295,19 +324,22 @@ class AppDelegate: NSObject {
             completion?()
             return false
         }
+        diagLogPublic("openMarkdownFiles: theEditor=\(theEditor) obsidianBundleId=\(obsidianBundleId)")
 
         if theEditor == obsidianBundleId {
             guard let obsidianUrl = ObsidianVault.openURL(for: firstFile) else {
+                diagLogPublic("openMarkdownFiles: ObsidianVault.openURL(for:) returned nil for \(firstFile.path)")
                 completion?()
                 return false
             }
-            print("opening: \(firstFile) in Obsidian via \(obsidianUrl)")
+            diagLogPublic("opening: \(firstFile.path) in Obsidian via \(obsidianUrl.absoluteString)")
             workspace.open(obsidianUrl)
             completion?()
             return true
         }
 
         guard let editorUrl = workspace.urlForApplication(withBundleIdentifier: theEditor) else {
+            diagLogPublic("openMarkdownFiles: urlForApplication(withBundleIdentifier: \(theEditor)) returned nil")
             let alert = NSAlert()
             alert.messageText = "Editor Not Found"
             alert.informativeText = "\(selfName) couldn't find \(theEditor)."
@@ -316,16 +348,24 @@ class AppDelegate: NSObject {
             completion?()
             return false
         }
+        diagLogPublic("openMarkdownFiles: editorUrl=\(editorUrl.path)")
 
         let alreadyRunning = workspace.runningApplications.contains {
             $0.bundleIdentifier?.lowercased() == theEditor.lowercased()
         }
 
+        diagLogPublic("openMarkdownFiles: alreadyRunning=\(alreadyRunning)")
         if alreadyRunning {
             print("opening: \(urls) in \(theEditor) (already running)")
-            workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                diagLogPublic("open(withApplicationAt:) (already running) completion: error=\(String(describing: error))")
                 if let error {
                     print("failed to open \(urls) in \(theEditor): \(error)")
+                    let fallbackResult = self?.openViaAppleEvent(urls: urls, bundleIdentifier: theEditor)
+                    diagLogPublic("Apple Event fallback result=\(String(describing: fallbackResult))")
+                    if fallbackResult != true {
+                        print("Apple Event fallback also failed for \(theEditor)")
+                    }
                 }
                 completion?()
             }
@@ -338,6 +378,7 @@ class AppDelegate: NSObject {
             // already-running case that works reliably.
             print("launching \(theEditor) before opening: \(urls)")
             workspace.openApplication(at: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                diagLogPublic("openApplication(at:) completion: error=\(String(describing: error))")
                 guard let self else {
                     completion?()
                     return
@@ -348,9 +389,15 @@ class AppDelegate: NSObject {
                     return
                 }
                 DispatchQueue.main.async {
-                    self.workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                    self.workspace.open(urls, withApplicationAt: editorUrl, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                        diagLogPublic("open(withApplicationAt:) (after launch) completion: error=\(String(describing: error))")
                         if let error {
                             print("failed to open \(urls) in \(theEditor) after launch: \(error)")
+                            let fallbackResult = self?.openViaAppleEvent(urls: urls, bundleIdentifier: theEditor)
+                            diagLogPublic("Apple Event fallback result=\(String(describing: fallbackResult))")
+                            if fallbackResult != true {
+                                print("Apple Event fallback also failed for \(theEditor)")
+                            }
                         }
                         completion?()
                     }
@@ -358,6 +405,46 @@ class AppDelegate: NSObject {
             }
         }
         return true
+    }
+
+    // Some editors — specifically those manually added via "Add Editor…" because they don't
+    // declare markdown document-type support — get rejected by NSWorkspace.open's LaunchServices
+    // UTI validation, surfacing as "The application <X> cannot open the specified document or
+    // URL" even though the app opens/handles .md files fine once told to directly (confirmed:
+    // e.g. ChatGPT Atlas). Sending the underlying 'aevt'/'odoc' Apple Event bypasses that
+    // validation entirely — it's the same low-level open-document mechanism virtually every
+    // AppKit/Electron app already responds to, independent of declared UTIs. This is a documented
+    // workaround for a long-standing NSWorkspace/LaunchServices quirk, not something specific to
+    // this app: https://developer.apple.com/forums/thread/723842
+    private func openViaAppleEvent(urls: [URL], bundleIdentifier: String) -> Bool {
+        guard let app = workspace.runningApplications.first(where: {
+            $0.bundleIdentifier?.lowercased() == bundleIdentifier.lowercased()
+        }) else {
+            diagLogPublic("openViaAppleEvent: no running app found for \(bundleIdentifier)")
+            return false
+        }
+        let target = NSAppleEventDescriptor(processIdentifier: app.processIdentifier)
+        let event = NSAppleEventDescriptor(
+            eventClass: AEEventClass(kCoreEventClass),
+            eventID: AEEventID(kAEOpenDocuments),
+            targetDescriptor: target,
+            returnID: AEReturnID(kAutoGenerateReturnID),
+            transactionID: AETransactionID(kAnyTransactionID)
+        )
+        let fileList = NSAppleEventDescriptor.list()
+        for (index, url) in urls.enumerated() {
+            // AppleEvent lists are 1-indexed.
+            fileList.insert(NSAppleEventDescriptor(fileURL: url), at: index + 1)
+        }
+        event.setParam(fileList, forKeyword: keyDirectObject)
+        do {
+            _ = try event.sendEvent(options: [.waitForReply], timeout: 10.0)
+            app.activate()
+            return true
+        } catch {
+            diagLogPublic("Apple Event open failed for \(bundleIdentifier): \(error)")
+            return false
+        }
     }
 
     // MARK: Management Methods
@@ -508,7 +595,7 @@ class AppDelegate: NSObject {
     // the file actually lives inside one of its registered vaults — it can't sensibly open
     // anything else, so it isn't a valid candidate at all in that case.
     func getOpeningEditorId(forFile file: URL) -> String? {
-        let fileIsInVault = ObsidianVault.contains(file)
+        let fileIsInVault = !defaults.detectObsidianVaults || ObsidianVault.contains(file)
         let blocklist = defaults.editorBlocklist
         func isEligible(_ bundleId: String) -> Bool {
             if bundleId == obsidianBundleId && !fileIsInVault {
@@ -1030,6 +1117,15 @@ class AppDelegate: NSObject {
         primaryRow.orientation = .horizontal
         primaryRow.alignment = .centerY
 
+        let vaultCheckbox = NSButton(
+            checkboxWithTitle: "Detect Obsidian vault documents",
+            target: self,
+            action: #selector(detectObsidianVaultsChange(sender:))
+        )
+        vaultCheckbox.state = defaults.detectObsidianVaults ? .on : .off
+        vaultCheckbox.toolTip = "When checked, Obsidian is only offered as an editor for files inside one of its registered vaults. When unchecked, Obsidian is treated like any other editor and opened for any markdown file."
+        detectObsidianVaultsCheckbox = vaultCheckbox
+
         let explanation = NSTextField(wrappingLabelWithString: "Checked editors will never be opened by \(selfName), even if last used. Check or uncheck multiple items by selecting more than one.")
         explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         // Matches the equivalent label above the Browser blocklist, which uses labelColor (not
@@ -1106,8 +1202,9 @@ class AppDelegate: NSObject {
 
         primaryRow.setContentHuggingPriority(.required, for: .vertical)
         explanation.setContentHuggingPriority(.required, for: .vertical)
+        vaultCheckbox.setContentHuggingPriority(.required, for: .vertical)
 
-        let section = NSStackView(views: [primaryRow, explanation, scrollView, buttonRow, deleteExplanation])
+        let section = NSStackView(views: [primaryRow, vaultCheckbox, explanation, scrollView, buttonRow, deleteExplanation])
         section.orientation = .vertical
         section.alignment = .leading
         section.spacing = 8
@@ -1519,6 +1616,10 @@ class AppDelegate: NSObject {
             self.updateBlocklistTable()
             self.updateMenuItems()
         }
+    }
+
+    @objc func detectObsidianVaultsChange(sender: NSButton) {
+        defaults.detectObsidianVaults = sender.state == .on
     }
 
     @objc func primaryEditorPopUpChange(sender: NSPopUpButton) {

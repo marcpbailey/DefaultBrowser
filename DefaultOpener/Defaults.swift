@@ -34,6 +34,9 @@ private enum DefaultKey: String {
     case TemplateMenuBarIcon
     case Bookmarks
     case AskedAboutLaunchAtLogin
+    case DebugLoggingEnabled
+    case DebugLogFilePath
+    case DetectObsidianVaults
 
     /// @deprecated replaced with BrowserBlocklist
     case BrowserBlacklist
@@ -53,6 +56,9 @@ let defaultSettings: [String: AnyObject] = [
     DefaultKey.TemplateMenuBarIcon.rawValue: true as AnyObject,
     DefaultKey.Bookmarks.rawValue: [:] as AnyObject,
     DefaultKey.AskedAboutLaunchAtLogin.rawValue: false as AnyObject,
+    DefaultKey.DebugLoggingEnabled.rawValue: false as AnyObject,
+    DefaultKey.DebugLogFilePath.rawValue: "" as AnyObject,
+    DefaultKey.DetectObsidianVaults.rawValue: true as AnyObject,
 ]
 
 extension ThisDefaults {
@@ -210,6 +216,42 @@ class ThisDefaults: UserDefaults {
         }
         set (value) {
             set(value, forKey: DefaultKey.AskedAboutLaunchAtLogin.rawValue)
+        }
+    }
+
+    // Enables verbose diagnostic logging of the markdown-editor open path. Off by default; toggle with
+    // `defaults write com.marcbailey.defaultopener DebugLoggingEnabled -bool true`.
+    var debugLoggingEnabled: Bool {
+        get {
+            bool(forKey: DefaultKey.DebugLoggingEnabled.rawValue)
+        }
+        set (value) {
+            set(value, forKey: DefaultKey.DebugLoggingEnabled.rawValue)
+        }
+    }
+
+    // Optional file path to also append diagnostic log lines to (in addition to os_log), e.g.
+    // `defaults write com.marcbailey.defaultopener DebugLogFilePath -string /tmp/defaultopener.log`.
+    var debugLogFilePath: String? {
+        get {
+            let value = string(forKey: DefaultKey.DebugLogFilePath.rawValue)
+            return (value?.isEmpty ?? true) ? nil : value
+        }
+        set (value) {
+            set(value as? NSString, forKey: DefaultKey.DebugLogFilePath.rawValue)
+        }
+    }
+
+    // When on (default), Obsidian is only considered as a candidate editor for files that live
+    // inside one of its registered vaults (see ObsidianVault.swift). When off, Obsidian is treated
+    // like any other editor and gets sent every markdown file unconditionally via its URL scheme,
+    // regardless of vault membership.
+    var detectObsidianVaults: Bool {
+        get {
+            bool(forKey: DefaultKey.DetectObsidianVaults.rawValue)
+        }
+        set (value) {
+            set(value, forKey: DefaultKey.DetectObsidianVaults.rawValue)
         }
     }
 }

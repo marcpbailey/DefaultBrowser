@@ -96,6 +96,8 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Default Opener needs to tell your chosen markdown editor to open a file directly when that editor doesn't declare support for the .md file type itself.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
